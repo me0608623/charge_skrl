@@ -279,8 +279,14 @@ def progress_to_goal(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch
     current_distance = torch.nan_to_num(current_distance, nan=10.0, posinf=10.0, neginf=0.0)
 
     # 獲取上一步的距離（如果沒有記錄，初始化為當前距離）
-    if not hasattr(env, '_previous_goal_distance'):
+    if not hasattr(env, '_previous_goal_distance') or env._previous_goal_distance is None:
         env._previous_goal_distance = current_distance.clone()
+        return torch.zeros(env.num_envs, device=env.device)
+
+    # 🔥 H1 修復：偵測 episode reset，避免跨 episode 獎勵洩漏
+    # episode_length_buf == 0 表示該 env 剛 reset，prev distance 是上一輪殘留
+    just_reset = env.episode_length_buf == 0
+    env._previous_goal_distance[just_reset] = current_distance[just_reset]
 
     previous_distance = env._previous_goal_distance
 

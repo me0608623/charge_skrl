@@ -1,0 +1,74 @@
+# ==============================================================================
+# 實驗 C：value_coef 0.5 → 1.0 — 診斷 critic 權重不足是否為主因
+# ==============================================================================
+# 基線 VLP16 v3 配置，僅修改 value_loss_scale
+# 讓 optimizer 更重視 critic 擬合
+# 預期：value loss 應更穩，但 policy 更新可能略受壓制
+# ==============================================================================
+
+seed: 42
+
+models:
+  separate: True
+  policy:
+    class: vlp16_models.VLP16DiscretePolicy
+    unnormalized_log_prob: True
+  value:
+    class: vlp16_models.VLP16Value
+    clip_actions: False
+
+memory:
+  class: RandomMemory
+  memory_size: -1
+
+agent:
+  class: PPO
+
+  rollouts: 128
+  learning_epochs: 8
+  mini_batches: 8
+
+  discount_factor: 0.995
+  lambda: 0.95
+
+  learning_rate: !!float 1e-4
+  learning_rate_scheduler: KLAdaptiveLR
+  learning_rate_scheduler_kwargs:
+    kl_threshold: 0.008
+    min_lr: !!float 5e-5
+    max_lr: !!float 3e-4
+    kl_factor: 2.0
+    lr_factor: 1.5
+
+  state_preprocessor: RunningStandardScaler
+  state_preprocessor_kwargs: null
+  value_preprocessor: RunningStandardScaler
+  value_preprocessor_kwargs: null
+
+  random_timesteps: 0
+  learning_starts: 0
+
+  grad_norm_clip: 1.0
+  ratio_clip: 0.2
+  value_clip: 0.2
+  clip_predicted_values: True
+
+  entropy_loss_scale: 0.01
+
+  # ★ 實驗 C 核心變更：value_loss_scale 0.5 → 1.0
+  value_loss_scale: 1.0
+
+  kl_threshold: 0.0
+  rewards_shaper_scale: 1.0
+  time_limit_bootstrap: True
+
+  experiment:
+    directory: "charge_vlp16_expC_value_coef1"
+    experiment_name: ""
+    write_interval: auto
+    checkpoint_interval: auto
+
+trainer:
+  class: SequentialTrainer
+  timesteps: 234375
+  environment_info: log

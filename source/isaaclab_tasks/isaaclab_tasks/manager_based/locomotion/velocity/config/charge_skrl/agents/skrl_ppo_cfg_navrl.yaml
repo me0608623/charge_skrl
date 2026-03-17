@@ -131,8 +131,8 @@ agent:
   # 獎勵整形
   rewards_shaper_scale: 1.0
 
-  # 時間限制啟動
-  time_limit_bootstrap: False
+  # 時間限制啟動 — H2 修復：timeout 應 bootstrap V(s')
+  time_limit_bootstrap: True
 
   # 實驗配置
   experiment:

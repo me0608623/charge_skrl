@@ -92,7 +92,8 @@ agent:
 
   rewards_shaper_scale: 1.0
 
-  time_limit_bootstrap: False
+  # H2 修復：timeout 應 bootstrap V(s')
+  time_limit_bootstrap: True
 
   experiment:
     directory: "charge_competitive"

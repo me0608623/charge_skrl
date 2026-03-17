@@ -85,6 +85,13 @@ class TrainingDebugLogger:
         self._lidar_min_raw: list[float] = []
         self._lidar_max_range_hit_ratio: list[float] = []
 
+        # ── H1/H2/H3 Debug: reward & termination diagnostics ──
+        self._terminated_count: int = 0
+        self._truncated_count: int = 0
+        self._total_step_count: int = 0
+        self._progress_reward_at_reset: list[float] = []  # H1 check: should be ~0
+        self._reward_summary_printed: bool = False
+
         # Print unwrap result
         if self._isaac_env is not None:
             print(f"[DebugLogger] Isaac Lab env unwrap successful: {type(self._isaac_env).__name__}")
@@ -117,6 +124,19 @@ class TrainingDebugLogger:
 
         with torch.no_grad():
             dones = (terminated.view(-1) | truncated.view(-1))
+
+            # ── H1/H2 Debug: termination stats ──
+            self._terminated_count += terminated.view(-1).sum().item()
+            self._truncated_count += truncated.view(-1).sum().item()
+            self._total_step_count += terminated.numel()
+
+            # ── H1 Debug: check progress reward at episode reset ──
+            self._check_progress_reward_at_reset()
+
+            # ── H3 Debug: one-time reward term summary ──
+            if not self._reward_summary_printed:
+                self._print_reward_summary()
+                self._reward_summary_printed = True
 
             # ── Action pipeline ──
             self._collect_action_stats(actions)
@@ -187,6 +207,14 @@ class TrainingDebugLogger:
             m["robot/lidar_min_raw"] = np.mean(self._lidar_min_raw)
         if self._lidar_max_range_hit_ratio:
             m["robot/lidar_no_hit_ratio"] = np.mean(self._lidar_max_range_hit_ratio)
+
+        # ── H1/H2 Debug: termination & progress reset stats ──
+        if self._total_step_count > 0:
+            m["debug/terminated_rate"] = self._terminated_count / self._total_step_count
+            m["debug/truncated_rate"] = self._truncated_count / self._total_step_count
+        if self._progress_reward_at_reset:
+            m["debug/progress_reward_at_reset_mean"] = np.mean(self._progress_reward_at_reset)
+            m["debug/progress_reward_at_reset_max"] = np.max(np.abs(self._progress_reward_at_reset))
 
         # Reset all buffers
         self._reset()
@@ -456,6 +484,73 @@ class TrainingDebugLogger:
                 break
         return " -> ".join(chain)
 
+    def _check_progress_reward_at_reset(self) -> None:
+        """H1 验证: 检查 episode reset 后第一步的 progress reward 是否异常。
+
+        如果 H1 修复生效，reset 后第一步的 progress reward 应接近 0。
+        如果看到大数值 (>0.5)，表示仍有跨 episode 状态泄漏。
+        """
+        isaac_env = self._isaac_env
+        if isaac_env is None:
+            return
+        try:
+            just_reset = isaac_env.episode_length_buf == 0
+            if not just_reset.any():
+                return
+
+            # 检查 progress_to_goal 的缓存状态
+            if hasattr(isaac_env, '_previous_goal_distance'):
+                robot = isaac_env.scene["robot"]
+                robot_pos = robot.data.root_pos_w[:, :2]
+                if hasattr(isaac_env, '_local_goal_world') and isaac_env._local_goal_world is not None:
+                    goal_pos = isaac_env._local_goal_world
+                else:
+                    goal_pos = isaac_env.command_manager.get_command("goal_command")[:, :2]
+                d_curr = torch.norm(goal_pos - robot_pos, dim=1)
+                d_prev = isaac_env._previous_goal_distance
+                # 只检查刚 reset 的 env
+                delta = (d_prev[just_reset] - d_curr[just_reset]).abs()
+                if delta.numel() > 0:
+                    self._progress_reward_at_reset.append(delta.mean().item())
+
+            # 同样检查 potential_progress_reward 的缓存
+            if hasattr(isaac_env, '_prev_goal_dist'):
+                robot = isaac_env.scene["robot"]
+                robot_pos = robot.data.root_pos_w[:, :2]
+                if hasattr(isaac_env, '_local_goal_world') and isaac_env._local_goal_world is not None:
+                    goal_pos = isaac_env._local_goal_world
+                else:
+                    goal_pos = isaac_env.command_manager.get_command("goal_command")[:, :2]
+                d_curr = torch.norm(goal_pos - robot_pos, dim=1)
+                d_prev = isaac_env._prev_goal_dist
+                delta = (d_prev[just_reset] - d_curr[just_reset]).abs()
+                if delta.numel() > 0:
+                    self._progress_reward_at_reset.append(delta.mean().item())
+        except Exception:
+            pass  # Non-critical debug metric
+
+    def _print_reward_summary(self) -> None:
+        """H3 验证: 打印当前启用的 reward terms 和权重。"""
+        isaac_env = self._isaac_env
+        if isaac_env is None:
+            return
+        try:
+            rm = isaac_env.reward_manager
+            print("\n" + "=" * 70)
+            print("[DebugLogger] === ACTIVE REWARD TERMS (H3 Check) ===")
+            print("=" * 70)
+            for term_name, term_cfg in zip(rm._term_names, rm._term_cfgs):
+                weight = getattr(term_cfg, 'weight', '?')
+                func = getattr(term_cfg, 'func', None)
+                func_name = func.__name__ if callable(func) else str(func)
+                is_goal = any(kw in term_name.lower() or kw in func_name.lower()
+                              for kw in ['goal', 'progress', 'reaching', 'heading', 'velocity_toward', 'potential'])
+                marker = " ← GOAL-RELATED" if is_goal else ""
+                print(f"  {term_name:30s} w={weight:>8} func={func_name}{marker}")
+            print("=" * 70 + "\n")
+        except Exception as e:
+            print(f"[DebugLogger] Reward summary failed: {e}")
+
     def _reset(self) -> None:
         """Clear all per-window accumulators."""
         self._step_count = 0
@@ -478,3 +573,9 @@ class TrainingDebugLogger:
         self._min_obstacle_dist.clear()
         self._lidar_min_raw.clear()
         self._lidar_max_range_hit_ratio.clear()
+
+        # H1/H2 debug counters
+        self._terminated_count = 0
+        self._truncated_count = 0
+        self._total_step_count = 0
+        self._progress_reward_at_reset.clear()

@@ -23,6 +23,7 @@ from .cfg import (
     ChargeNavigationEnvCfgPhase0NavRL,
     ChargeNavigationEnvCfgCompetitive,
     ChargeNavigationEnvCfgVLP16,
+    ChargeNavigationEnvCfgVLP16_PLAY,
 )
 
 # 實驗性配置（依賴模組可能尚未完成）
@@ -136,5 +137,63 @@ gym.register(
     kwargs={
         "env_cfg_entry_point": f"{__name__}.cfg.charge_env_cfg_vlp16:ChargeNavigationEnvCfgVLP16",
         "skrl_cfg_entry_point": f"{_skrl_agents}:skrl_ppo_cfg_vlp16.yaml",
+    },
+)
+
+gym.register(
+    id="Isaac-Navigation-Charge-VLP16-Play",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.cfg.charge_env_cfg_vlp16:ChargeNavigationEnvCfgVLP16_PLAY",
+        "skrl_cfg_entry_point": f"{_skrl_agents}:skrl_ppo_cfg_vlp16.yaml",
+    },
+)
+
+# ============================================================================
+# VLP-16 對照實驗 (A/B/C 用同一環境，僅 PPO 配置不同; D 用新環境)
+# ============================================================================
+
+# Exp A: Reward Scale ÷10
+gym.register(
+    id="Isaac-Navigation-Charge-VLP16-ExpA",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.cfg.charge_env_cfg_vlp16:ChargeNavigationEnvCfgVLP16",
+        "skrl_cfg_entry_point": f"{_skrl_agents}:skrl_ppo_cfg_vlp16_expA.yaml",
+    },
+)
+
+# Exp B: gamma 0.99
+gym.register(
+    id="Isaac-Navigation-Charge-VLP16-ExpB",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.cfg.charge_env_cfg_vlp16:ChargeNavigationEnvCfgVLP16",
+        "skrl_cfg_entry_point": f"{_skrl_agents}:skrl_ppo_cfg_vlp16_expB.yaml",
+    },
+)
+
+# Exp C: value_coef 1.0
+gym.register(
+    id="Isaac-Navigation-Charge-VLP16-ExpC",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.cfg.charge_env_cfg_vlp16:ChargeNavigationEnvCfgVLP16",
+        "skrl_cfg_entry_point": f"{_skrl_agents}:skrl_ppo_cfg_vlp16_expC.yaml",
+    },
+)
+
+# Exp D: 近障速度懲罰
+gym.register(
+    id="Isaac-Navigation-Charge-VLP16-ExpD",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.cfg.charge_env_cfg_vlp16_expD:ChargeNavigationEnvCfgVLP16_ExpD",
+        "skrl_cfg_entry_point": f"{_skrl_agents}:skrl_ppo_cfg_vlp16_expD.yaml",
     },
 )

@@ -117,8 +117,9 @@ agent:
   # 獎勵整形（可選）
   rewards_shaper_scale: 1.0
 
-  # 時間限制啟動（是否對終止狀態 bootstrap）
-  time_limit_bootstrap: False
+  # 時間限制啟動（是否對 timeout/truncated episode bootstrap）
+  # H2 修復：timeout 不是真正 terminal，應 bootstrap V(s') 而非截斷為 0
+  time_limit_bootstrap: True
 
   # 實驗配置
   experiment:

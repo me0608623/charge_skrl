@@ -1,0 +1,74 @@
+# ==============================================================================
+# 實驗 B：gamma 0.995 → 0.99 — 診斷高 gamma 是否讓 critic 太難學
+# ==============================================================================
+# 基線 VLP16 v3 配置，僅修改 discount_factor
+# 有效視野從 200 步縮到 100 步，return target 方差降低
+# 預期：value loss 應更穩，success 可能前期更快但長期可能稍低
+# ==============================================================================
+
+seed: 42
+
+models:
+  separate: True
+  policy:
+    class: vlp16_models.VLP16DiscretePolicy
+    unnormalized_log_prob: True
+  value:
+    class: vlp16_models.VLP16Value
+    clip_actions: False
+
+memory:
+  class: RandomMemory
+  memory_size: -1
+
+agent:
+  class: PPO
+
+  rollouts: 128
+  learning_epochs: 8
+  mini_batches: 8
+
+  # ★ 實驗 B 核心變更：gamma 0.995 → 0.99
+  discount_factor: 0.99
+
+  lambda: 0.95
+
+  learning_rate: !!float 1e-4
+  learning_rate_scheduler: KLAdaptiveLR
+  learning_rate_scheduler_kwargs:
+    kl_threshold: 0.008
+    min_lr: !!float 5e-5
+    max_lr: !!float 3e-4
+    kl_factor: 2.0
+    lr_factor: 1.5
+
+  state_preprocessor: RunningStandardScaler
+  state_preprocessor_kwargs: null
+  value_preprocessor: RunningStandardScaler
+  value_preprocessor_kwargs: null
+
+  random_timesteps: 0
+  learning_starts: 0
+
+  grad_norm_clip: 1.0
+  ratio_clip: 0.2
+  value_clip: 0.2
+  clip_predicted_values: True
+
+  entropy_loss_scale: 0.01
+  value_loss_scale: 0.5
+
+  kl_threshold: 0.0
+  rewards_shaper_scale: 1.0
+  time_limit_bootstrap: True
+
+  experiment:
+    directory: "charge_vlp16_expB_gamma099"
+    experiment_name: ""
+    write_interval: auto
+    checkpoint_interval: auto
+
+trainer:
+  class: SequentialTrainer
+  timesteps: 234375
+  environment_info: log

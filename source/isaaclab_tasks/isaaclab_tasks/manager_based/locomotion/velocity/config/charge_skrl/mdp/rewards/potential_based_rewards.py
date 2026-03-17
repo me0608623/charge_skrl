@@ -213,6 +213,49 @@ def smooth_collision_penalty(
     return penalty
 
 
+def near_obstacle_speed_penalty(
+    env: ManagerBasedRLEnv,
+    sensor_cfg: SceneEntityCfg = SceneEntityCfg("lidar"),
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    danger_distance: float = 1.5,
+    safe_distance: float = 3.0,
+) -> torch.Tensor:
+    """近障時高速懲罰 — 教會 agent 在靠近障礙物時減速。
+
+    Math:
+        d_min = min(LiDAR readings)
+        speed = ||v_xy||
+        if d_min >= safe_distance: penalty = 0
+        else:
+            proximity = clamp((safe_distance - d_min) / (safe_distance - danger_distance), 0, 1)
+            penalty = proximity * speed
+
+    原理:
+        - 遠離障礙物時不受限（proximity=0）
+        - 進入 [danger, safe] 區間時，速度越快懲罰越大
+        - 這比純 exponential_obstacle_penalty 更有行為意義：
+          不是「靠近就懲罰」，而是「靠近且快速才懲罰」
+        - 鼓勵 agent 在窄道中降速通過而非全速衝撞
+
+    Returns:
+        [num_envs] in [0, ~1.0]. Weight should be NEGATIVE (e.g., -2.0).
+    """
+    d_min = _get_lidar_min_distance(env, sensor_cfg)  # [num_envs]
+    robot: Articulation = env.scene[robot_cfg.name]
+    speed = torch.norm(
+        torch.nan_to_num(robot.data.root_lin_vel_w[:, :2], nan=0.0), dim=1
+    )  # [num_envs]
+
+    # Proximity factor: 0 when far, 1 when at danger_distance
+    range_size = safe_distance - danger_distance
+    proximity = ((safe_distance - d_min) / (range_size + 1e-6)).clamp(0.0, 1.0)
+
+    # Penalty = proximity × speed (normalized by max_speed ~1.0 m/s)
+    penalty = proximity * speed.clamp(max=2.0)
+
+    return penalty
+
+
 _collision_diag_count = 0
 
 def collision_terminal_penalty(
