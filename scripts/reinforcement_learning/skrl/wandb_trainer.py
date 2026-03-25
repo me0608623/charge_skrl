@@ -227,9 +227,9 @@ class WandBSequentialTrainer(SequentialTrainer):
                     f"→ saved to {best_dir}/",
                     flush=True,
                 )
-                if self._wandb_run is not None:
-                    self._wandb_run.summary["best_sr"] = smoothed_sr
-                    self._wandb_run.summary["best_sr_timestep"] = timestep
+                if self.wandb_run is not None:
+                    self.wandb_run.summary["best_sr"] = smoothed_sr
+                    self.wandb_run.summary["best_sr_timestep"] = timestep
             except Exception as e:
                 print(f"[Best Model] Save failed: {e}", flush=True)
 
