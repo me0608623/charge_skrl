@@ -105,6 +105,40 @@ parser.add_argument("--shield_mode", type=str, default="soft",
                     choices=["soft", "hard"],
                     help="Shield mode: soft(linear reduction) / hard(force stop)")
 
+# --- CADN observation preprocessor ---
+parser.add_argument("--use_cadn", action="store_true", default=False,
+                    help="Replace state preprocessor with CADN (per-branch dual-rate EMA normalizer)")
+
+# --- NavRL-Ground v1 reward mode ---
+parser.add_argument("--reward_mode", type=str, default="current",
+                    choices=["current", "navrl_ground_v1", "navrl_ground_v2", "navrl_ground_v3", "navrl_ground_v4", "navrl_ground_v4_b", "navrl_ground_v5"],
+                    help="Reward mode: v4(v3+goal500) / v4_b(v4+gap rewards) / v5(v4+collision100)")
+parser.add_argument("--dynamic_safety_mode", type=str, default="log_distance",
+                    choices=["log_distance", "closing_risk"],
+                    help="Dynamic safety reward mode")
+parser.add_argument("--goal_vel_gate_beta", type=float, default=0.2,
+                    help="Goal velocity soft gate floor (beta)")
+parser.add_argument("--progress_scale_gamma", type=float, default=0.3,
+                    help="Progress soft scale floor (gamma)")
+parser.add_argument("--w_goal", type=float, default=500.0, help="Goal terminal reward weight")
+parser.add_argument("--w_vel", type=float, default=10.0, help="Goal velocity reward weight")
+parser.add_argument("--w_prog", type=float, default=12.0, help="Progress reward weight")
+parser.add_argument("--w_ss", type=float, default=3.0, help="Static safety reward weight")
+parser.add_argument("--w_ds", type=float, default=4.0, help="Dynamic safety reward weight")
+parser.add_argument("--w_smooth", type=float, default=-0.05, help="Smoothness penalty weight")
+parser.add_argument("--w_time", type=float, default=-0.1, help="Time penalty weight")
+parser.add_argument("--w_collision", type=float, default=-100.0, help="Collision penalty weight")
+parser.add_argument("--w_alive", type=float, default=0.2, help="Alive reward weight (v2 only)")
+parser.add_argument("--goal_vel_use_soft_gate", action="store_true", default=False,
+                    help="Enable soft gate on goal_velocity (v2 default=off, v1 style=on)")
+
+# --- Curriculum version ---
+parser.add_argument("--curriculum_version", type=str, default=None,
+                    choices=["baseline_v1", "goal_first_v1", "goal_first_v2", "goal_first_v2_b", "goal_first_v3"],
+                    help="Curriculum version (default: use task config's baseline_v1)")
+parser.add_argument("--no_walls", action="store_true", default=False,
+                    help="移除所有內牆（保留外牆），所有 stage 的 min/max_walls=0")
+
 # Append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 
@@ -448,6 +482,183 @@ def _apply_ablation_overrides(env_cfg, args_cli):
         print(f"[ABLATION] safety_shield: mode={mode}")
         changed = True
 
+    # --- reward_mode: navrl_ground_v1 ---
+    if getattr(args_cli, 'reward_mode', 'current') == "navrl_ground_v1":
+        from isaaclab_tasks.manager_based.locomotion.velocity.config.charge_skrl.cfg.charge_env_cfg_vlp16_curriculum import (
+            RewardsCfgVLP16NavRLGround,
+        )
+        env_cfg.rewards = RewardsCfgVLP16NavRLGround()
+
+        # 套用 CLI 權重覆蓋
+        r = env_cfg.rewards
+        r.reaching_goal.weight = args_cli.w_goal
+        r.goal_velocity.weight = args_cli.w_vel
+        r.goal_progress.weight = args_cli.w_prog
+        r.static_safety.weight = args_cli.w_ss
+        r.dynamic_safety.weight = args_cli.w_ds
+        r.smoothness.weight = args_cli.w_smooth
+        r.time_penalty.weight = args_cli.w_time
+        r.collision_ground.weight = args_cli.w_collision
+
+        # 套用 CLI 參數覆蓋
+        r.goal_velocity.params["gate_beta"] = args_cli.goal_vel_gate_beta
+        r.goal_progress.params["scale_gamma"] = args_cli.progress_scale_gamma
+        r.dynamic_safety.params["mode"] = args_cli.dynamic_safety_mode
+
+        print(
+            f"[REWARD_MODE] navrl_ground_v1 | "
+            f"w: goal={args_cli.w_goal} vel={args_cli.w_vel} prog={args_cli.w_prog} "
+            f"ss={args_cli.w_ss} ds={args_cli.w_ds} smooth={args_cli.w_smooth} "
+            f"time={args_cli.w_time} collision={args_cli.w_collision} | "
+            f"beta={args_cli.goal_vel_gate_beta} gamma={args_cli.progress_scale_gamma} "
+            f"ds_mode={args_cli.dynamic_safety_mode}"
+        )
+        changed = True
+
+    # --- reward_mode: navrl_ground_v2 (no gate + alive reward) ---
+    if getattr(args_cli, 'reward_mode', 'current') == "navrl_ground_v2":
+        from isaaclab_tasks.manager_based.locomotion.velocity.config.charge_skrl.cfg.charge_env_cfg_vlp16_curriculum import (
+            RewardsCfgVLP16NavRLGroundV2,
+        )
+        env_cfg.rewards = RewardsCfgVLP16NavRLGroundV2()
+
+        # 套用 CLI 覆蓋
+        r = env_cfg.rewards
+        r.alive.weight = args_cli.w_alive
+        r.dynamic_safety.params["mode"] = args_cli.dynamic_safety_mode
+
+        # gate 消融：v2 預設 False，--goal_vel_use_soft_gate 可恢復 gate
+        if args_cli.goal_vel_use_soft_gate:
+            r.goal_velocity.params["use_soft_gate"] = True
+            r.goal_velocity.params["gate_beta"] = args_cli.goal_vel_gate_beta
+            print(f"[ABLATION] goal_velocity: soft_gate ON, beta={args_cli.goal_vel_gate_beta}")
+
+        print(
+            f"[REWARD_MODE] navrl_ground_v2 (no gate + alive) | "
+            f"w: alive={args_cli.w_alive} vel=2.0 prog=3.0 ss=2.0 ds=2.0 "
+            f"smooth=-0.1 goal=100 collision=-50 | "
+            f"ds_mode={args_cli.dynamic_safety_mode}"
+        )
+        changed = True
+
+    # --- reward_mode: navrl_ground_v3 (v2 + 20 obstacles + density weights) ---
+    if getattr(args_cli, 'reward_mode', 'current') == "navrl_ground_v3":
+        from isaaclab_tasks.manager_based.locomotion.velocity.config.charge_skrl.cfg.charge_env_cfg_vlp16_curriculum import (
+            RewardsCfgVLP16NavRLGroundV3,
+        )
+        env_cfg.rewards = RewardsCfgVLP16NavRLGroundV3()
+
+        r = env_cfg.rewards
+        r.alive.weight = args_cli.w_alive
+        r.dynamic_safety.params["mode"] = args_cli.dynamic_safety_mode
+
+        if args_cli.goal_vel_use_soft_gate:
+            r.goal_velocity.params["use_soft_gate"] = True
+            r.goal_velocity.params["gate_beta"] = args_cli.goal_vel_gate_beta
+
+        print(
+            f"[REWARD_MODE] navrl_ground_v3 (v2 + 20obs + density weights) | "
+            f"w: alive={args_cli.w_alive} | "
+            f"ds_mode={args_cli.dynamic_safety_mode} | "
+            f"weights controlled by curriculum stage"
+        )
+        changed = True
+
+    # --- reward_mode: navrl_ground_v4 (v3 + goal=500 + alive→alignment) ---
+    if getattr(args_cli, 'reward_mode', 'current') == "navrl_ground_v4":
+        from isaaclab_tasks.manager_based.locomotion.velocity.config.charge_skrl.cfg.charge_env_cfg_vlp16_curriculum import (
+            RewardsCfgVLP16NavRLGroundV3,
+        )
+        env_cfg.rewards = RewardsCfgVLP16NavRLGroundV3()
+
+        r = env_cfg.rewards
+        # v4 核心修正:
+        # 1. reaching_goal=500 (已在 V3 class 中設定)
+        # 2. alive=0 (移除存活獎勵，r_vel + γ折扣已足夠)
+        r.dynamic_safety.params["mode"] = args_cli.dynamic_safety_mode
+
+        if args_cli.goal_vel_use_soft_gate:
+            r.goal_velocity.params["use_soft_gate"] = True
+            r.goal_velocity.params["gate_beta"] = args_cli.goal_vel_gate_beta
+
+        print(
+            f"[REWARD_MODE] navrl_ground_v4 (v3 + goal=500 + no alive) | "
+            f"w: reaching_goal={r.reaching_goal.weight} alive={r.alive.weight} | "
+            f"ds_mode={args_cli.dynamic_safety_mode} | "
+            f"weights controlled by curriculum stage"
+        )
+        changed = True
+
+    # --- reward_mode: navrl_ground_v4_b (v4 + gap rewards for detour guidance) ---
+    if getattr(args_cli, 'reward_mode', 'current') == "navrl_ground_v4_b":
+        from isaaclab_tasks.manager_based.locomotion.velocity.config.charge_skrl.cfg.charge_env_cfg_vlp16_curriculum import (
+            RewardsCfgVLP16NavRLGroundV3b,
+        )
+        env_cfg.rewards = RewardsCfgVLP16NavRLGroundV3b()
+
+        r = env_cfg.rewards
+        r.dynamic_safety.params["mode"] = args_cli.dynamic_safety_mode
+
+        if args_cli.goal_vel_use_soft_gate:
+            r.goal_velocity.params["use_soft_gate"] = True
+            r.goal_velocity.params["gate_beta"] = args_cli.goal_vel_gate_beta
+
+        print(
+            f"[REWARD_MODE] navrl_ground_v4_b (v4 + gap rewards) | "
+            f"w: goal={r.reaching_goal.weight} alive={r.alive.weight} "
+            f"heading_to_gap={r.heading_to_gap.weight} forward_clearance={r.forward_clearance.weight} | "
+            f"ds_mode={args_cli.dynamic_safety_mode} | "
+            f"weights controlled by curriculum stage"
+        )
+        changed = True
+
+    # --- reward_mode: navrl_ground_v5 (collision=-100 + goal_first_v3 ss_boost Stage 3-6) ---
+    if getattr(args_cli, 'reward_mode', 'current') == "navrl_ground_v5":
+        from isaaclab_tasks.manager_based.locomotion.velocity.config.charge_skrl.cfg.charge_env_cfg_vlp16_curriculum import (
+            RewardsCfgVLP16NavRLGroundV5,
+        )
+        env_cfg.rewards = RewardsCfgVLP16NavRLGroundV5()
+
+        r = env_cfg.rewards
+        r.dynamic_safety.params["mode"] = args_cli.dynamic_safety_mode
+
+        if args_cli.goal_vel_use_soft_gate:
+            r.goal_velocity.params["use_soft_gate"] = True
+            r.goal_velocity.params["gate_beta"] = args_cli.goal_vel_gate_beta
+
+        print(
+            f"[REWARD_MODE] navrl_ground_v5 (collision=-100 + ss_boost Stage 3-6) | "
+            f"w: reaching_goal={r.reaching_goal.weight} "
+            f"collision={r.collision_ground.weight} alive={r.alive.weight} | "
+            f"ds_mode={args_cli.dynamic_safety_mode} | "
+            f"搭配 goal_first_v3 使用"
+        )
+        changed = True
+
+    # --- curriculum_version ---
+    cv = getattr(args_cli, 'curriculum_version', None)
+    if cv is not None:
+        cur = getattr(env_cfg, 'curriculum', None)
+        if cur is not None:
+            term = getattr(cur, 'goal_obstacle_curriculum', None)
+            if term is not None:
+                term.params["curriculum_version"] = cv
+                print(f"[CURRICULUM] version={cv}")
+                changed = True
+
+    # --- no_walls: 強制所有 stage 的內牆為 0 ---
+    if getattr(args_cli, 'no_walls', False):
+        from isaaclab_tasks.manager_based.locomotion.velocity.config.charge_skrl.curriculum.goal_obstacle_curriculum import (
+            CURRICULUM_CONFIGS,
+        )
+        cv_key = cv or "baseline_v1"
+        if cv_key in CURRICULUM_CONFIGS:
+            for stage_cfg in CURRICULUM_CONFIGS[cv_key]["stages"]:
+                stage_cfg["min_walls"] = 0
+                stage_cfg["max_walls"] = 0
+            print(f"[NO_WALLS] 所有 stage 的 min/max_walls 已設為 0（保留外牆）")
+            changed = True
+
     if not changed:
         print("[ABLATION] baseline (no overrides)")
 
@@ -605,6 +816,22 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                     "gap_reward_weight": args_cli.gap_reward_weight,
                     "use_safety_shield": args_cli.use_safety_shield,
                     "shield_mode": args_cli.shield_mode,
+                    # NavRL-Ground v1
+                    "reward_mode": args_cli.reward_mode,
+                    "dynamic_safety_mode": args_cli.dynamic_safety_mode,
+                    "goal_vel_gate_beta": args_cli.goal_vel_gate_beta,
+                    "progress_scale_gamma": args_cli.progress_scale_gamma,
+                    "w_goal": args_cli.w_goal,
+                    "w_vel": args_cli.w_vel,
+                    "w_prog": args_cli.w_prog,
+                    "w_ss": args_cli.w_ss,
+                    "w_ds": args_cli.w_ds,
+                    "w_smooth": args_cli.w_smooth,
+                    "w_time": args_cli.w_time,
+                    "w_collision": args_cli.w_collision,
+                    "curriculum_version": args_cli.curriculum_version or "baseline_v1",
+                    "w_alive": args_cli.w_alive,
+                    "use_cadn": args_cli.use_cadn,
                 },
                 tags=["AC", "ablation"],
             )
@@ -650,6 +877,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         runner = Runner(env, agent_cfg)
         agents_scope = runner.trainer.agents_scope if hasattr(runner.trainer, 'agents_scope') else None
 
+        # CADN: replace state_preprocessor
+        if getattr(args_cli, 'use_cadn', False):
+            from cadn import PerBranchCADN
+            cadn = PerBranchCADN(device=env.device)
+            runner.agent._state_preprocessor = cadn
+            runner.agent.checkpoint_modules["state_preprocessor"] = cadn
+            print("[INFO] CADN enabled — replaced RunningStandardScaler with PerBranchCADN")
+
         # TrainingDebugLogger
         from training_debug_logger import TrainingDebugLogger
         debug_logger = TrainingDebugLogger(
@@ -684,17 +919,50 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         runner = Runner(env, agent_cfg)
         trainer = None
 
+    # --- CADN injection (after agent creation, before checkpoint load) ---
+    if args_cli.use_cadn:
+        from cadn_preprocessor import CurriculumAwareDualRateNormalizer
+        obs_dim = env.observation_space.shape[-1] if hasattr(env.observation_space, "shape") else 139
+        cadn = CurriculumAwareDualRateNormalizer(
+            size=obs_dim,
+            device=runner.agent.device,
+        )
+        runner.agent._state_preprocessor = cadn
+        runner.agent.checkpoint_modules["state_preprocessor"] = cadn
+        print(f"[INFO] CADN enabled: state_preprocessor replaced (obs_dim={obs_dim})")
+
     # Load checkpoint if specified
     checkpoint_agent = runner.agent
     if args_cli.checkpoint is not None:
         print(f"[INFO] Loading model checkpoint from: {args_cli.checkpoint}")
         checkpoint_agent.load(args_cli.checkpoint)
 
-    # Print training info
-    print(f"[INFO] Starting training (Standard AC): {agent_cfg['trainer']['timesteps']} timesteps...")
-    print(f"[INFO] Rollouts per update: {agent_cfg['agent']['rollouts']}")
-    print(f"[INFO] Learning epochs: {agent_cfg['agent']['learning_epochs']}")
-    print(f"[INFO] Mini batches: {agent_cfg['agent']['mini_batches']}")
+    # ── 訓練啟動摘要 ──
+    r = env_cfg.rewards
+    reward_terms = []
+    for attr_name in dir(r):
+        attr = getattr(r, attr_name, None)
+        if hasattr(attr, 'weight') and hasattr(attr, 'func'):
+            reward_terms.append((attr_name, attr.weight))
+    active_terms = [(n, w) for n, w in reward_terms if w != 0.0]
+    inactive_terms = [n for n, w in reward_terms if w == 0.0]
+
+    cv = getattr(args_cli, 'curriculum_version', None) or 'default'
+    print("\n" + "=" * 70)
+    print("  訓練配置摘要")
+    print("=" * 70)
+    print(f"  Task:       {args_cli.task}")
+    print(f"  Reward:     {args_cli.reward_mode}")
+    print(f"  Curriculum: {cv}")
+    print(f"  Seed: {args_cli.seed}  |  Envs: {env_cfg.scene.num_envs}  |  dt: {env_cfg.decimation * env_cfg.sim.dt:.2f}s")
+    print(f"  Timesteps:  {agent_cfg['trainer']['timesteps']}  |  Rollouts: {agent_cfg['agent']['rollouts']}  |  Epochs: {agent_cfg['agent']['learning_epochs']}  |  Batches: {agent_cfg['agent']['mini_batches']}")
+    print(f"  γ: {agent_cfg['agent']['discount_factor']}  |  LR: {agent_cfg['agent']['learning_rate']}  |  Clip: {agent_cfg['agent']['ratio_clip']}")
+    print(f"\n  活躍 Reward Terms ({len(active_terms)}):")
+    for name, weight in sorted(active_terms, key=lambda x: -abs(x[1])):
+        print(f"    {name:30s} w={weight:+.1f}")
+    if inactive_terms:
+        print(f"  已關閉 ({len(inactive_terms)}): {', '.join(sorted(inactive_terms))}")
+    print("=" * 70 + "\n")
 
     try:
         if wandb_run is not None:

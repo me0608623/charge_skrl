@@ -441,6 +441,9 @@ class WandBSequentialTrainer(SequentialTrainer):
                             val = float(v)
                         else:
                             continue
+                        # 跳過 weight=0 的 reward term（永遠為 0）
+                        if k.startswith("Episode_Reward/") and val == 0.0:
+                            continue
                         for agent in self.agents:
                             agent.track_data(tag, val)
                         if tag not in tracking_data_snapshot:
@@ -613,6 +616,17 @@ class WandBSequentialTrainer(SequentialTrainer):
                     tracking_data_snapshot.update(
                         {k: [v] for k, v in abl_metrics.items()}
                     )
+
+                # CADN diagnostics
+                try:
+                    sp = self.agents._state_preprocessor
+                    if hasattr(sp, 'get_diagnostics'):
+                        cadn_diag = sp.get_diagnostics()
+                        tracking_data_snapshot.update(
+                            {k: [v] for k, v in cadn_diag.items()}
+                        )
+                except Exception:
+                    pass
 
                 # Module Entropy 指標：flush 累積的 mini-batch 數據，取平均後注入
                 if self._module_entropy_monitor is not None:
@@ -875,11 +889,11 @@ class WandBSequentialTrainer(SequentialTrainer):
         """
         metrics = {}
         if self._episode_count > 0:
-            metrics["nav/success_rate"] = self._goal_reached_count / self._episode_count
-            metrics["nav/collision_rate"] = self._collision_count / self._episode_count
-            metrics["nav/timeout_rate"] = self._timeout_count / self._episode_count
-            metrics["nav/total_episodes"] = self._episode_count
-            metrics["nav/episode_length_mean"] = self._episode_length_sum / self._episode_count
+            metrics["perf/success_rate"] = self._goal_reached_count / self._episode_count
+            metrics["perf/collision_rate"] = self._collision_count / self._episode_count
+            metrics["perf/timeout_rate"] = self._timeout_count / self._episode_count
+            metrics["perf/total_episodes"] = self._episode_count
+            metrics["perf/episode_length"] = self._episode_length_sum / self._episode_count
 
         # Per-env-type metrics (Phase 2)
         type_names = {0: "empty", 1: "static", 2: "dynamic"}
@@ -961,6 +975,9 @@ class WandBSequentialTrainer(SequentialTrainer):
                         elif isinstance(v, (int, float)):
                             val = float(v)
                         else:
+                            continue
+                        # 跳過 weight=0 的 reward term（永遠為 0）
+                        if k.startswith("Episode_Reward/") and val == 0.0:
                             continue
                         for agent in self.agents:
                             agent.track_data(tag, val)

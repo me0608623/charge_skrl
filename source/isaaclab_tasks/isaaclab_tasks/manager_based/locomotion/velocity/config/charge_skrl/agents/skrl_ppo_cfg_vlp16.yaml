@@ -39,9 +39,9 @@ agent:
 
   rollouts: 128
 
-  learning_epochs: 4    # v6: 6→4 — 搭配 LinearLR decay，後期低 LR + 少梯度步 = 更穩定
+  learning_epochs: 6    # 4→6: 提高數據利用率（梯度更新 32→96 次/rollout）
 
-  mini_batches: 8
+  mini_batches: 16      # 8→16: 更小 batch → 更多梯度步
 
   # Phase 1 初始值（課程動態調整 0.990→0.998）
   # Phase 1: 0.990（100步視野），Phase 4b: 0.998（500步視野）
@@ -54,14 +54,14 @@ agent:
   # v4 (max=3e-4) 和 v5 (max=1.5e-4) 都全程鎖死 max，KL 始終落在不動區
   # 改用線性衰減：1e-4 → 3e-5
   # 注意：SKRL 每個 PPO update 呼叫 step() × learning_epochs 次
-  # total_iters = (timesteps / rollouts) × learning_epochs = 1831 × 4 = 7324
+  # total_iters = (timesteps / rollouts) × learning_epochs = 1831 × 6 = 10986
   learning_rate: !!float 1e-4
 
   learning_rate_scheduler: "__import__('torch').optim.lr_scheduler.LinearLR"
   learning_rate_scheduler_kwargs:
     start_factor: 1.0
     end_factor: 0.3           # 1e-4 → 3e-5（保持後期學習能力）
-    total_iters: 7324         # = 1831 × 4 (learning_epochs)，覆蓋完整訓練
+    total_iters: 10986        # = 1831 × 6 (learning_epochs)，覆蓋完整訓練
 
   state_preprocessor: RunningStandardScaler
   state_preprocessor_kwargs: null
@@ -103,7 +103,7 @@ agent:
     directory: "charge_vlp16"
     experiment_name: ""
     write_interval: auto
-    checkpoint_interval: auto
+    checkpoint_interval: 11718  # 234375 × 5% ≈ 11718 → 20 個 checkpoint
 
 # ==============================================================================
 # 訓練器配置

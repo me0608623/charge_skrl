@@ -56,6 +56,15 @@ from .gap_rewards import (
     forward_clearance_improvement_reward,
 )
 
+from .navrl_ground_rewards import (
+    goal_velocity_reward,
+    goal_progress_reward,
+    static_safety_reward,
+    dynamic_safety_reward,
+    control_smoothness_penalty,
+    alive_reward,
+)
+
 __all__ = [
     # 工具函數
     "_print_diagnostics",
@@ -92,4 +101,11 @@ __all__ = [
     # Gap-seeking rewards
     "heading_to_gap_reward",
     "forward_clearance_improvement_reward",
+    # NavRL-Ground v1 rewards
+    "goal_velocity_reward",
+    "goal_progress_reward",
+    "static_safety_reward",
+    "dynamic_safety_reward",
+    "control_smoothness_penalty",
+    "alive_reward",
 ]
