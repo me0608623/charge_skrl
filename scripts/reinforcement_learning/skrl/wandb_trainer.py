@@ -87,6 +87,18 @@ class WandBSequentialTrainer(SequentialTrainer):
         self._initial_timestamp = None
         self._last_log_time = None
 
+        # weight=0 的 reward term 永久黑名單 — 不上傳 WandB
+        self._blocked_reward_keys: set[str] = {
+            "Episode_Reward/alive",
+            "Episode_Reward/time_penalty",
+            "Episode_Reward/velocity_too_low",
+            "Episode_Reward/acceleration_penalty",
+            "Episode_Reward/angular_velocity_penalty",
+            "Episode_Reward/collision_terminal",
+            "Episode_Reward/near_obstacle_penalty",
+            "Episode_Reward/potential_progress",
+        }
+
         # ── Local CSV logger ──
         self._csv_path: Optional[str] = None
         self._csv_file = None
@@ -441,8 +453,8 @@ class WandBSequentialTrainer(SequentialTrainer):
                             val = float(v)
                         else:
                             continue
-                        # 跳過 weight=0 的 reward term（永遠為 0）
-                        if k.startswith("Episode_Reward/") and val == 0.0:
+                        # 永久禁止 weight=0 的 reward term 上傳 WandB
+                        if k in self._blocked_reward_keys:
                             continue
                         for agent in self.agents:
                             agent.track_data(tag, val)
@@ -976,8 +988,8 @@ class WandBSequentialTrainer(SequentialTrainer):
                             val = float(v)
                         else:
                             continue
-                        # 跳過 weight=0 的 reward term（永遠為 0）
-                        if k.startswith("Episode_Reward/") and val == 0.0:
+                        # 永久禁止 weight=0 的 reward term 上傳 WandB
+                        if k in self._blocked_reward_keys:
                             continue
                         for agent in self.agents:
                             agent.track_data(tag, val)

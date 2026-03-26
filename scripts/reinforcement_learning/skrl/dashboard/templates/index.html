@@ -1,0 +1,1305 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Charge-SKRL Training Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://cdn.plot.ly/plotly-2.35.0.min.js"></script>
+  <script>
+    window.MathJax = {
+      tex: { inlineMath: [['\\(','\\)']], displayMath: [['\\[','\\]']] },
+      options: { skipHtmlTags: ['script','noscript','style','textarea','code'] }
+    };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" async></script>
+</head>
+<body>
+
+<!-- ══════════════ NAVBAR ══════════════ -->
+<nav class="navbar">
+  <span class="brand">Charge-SKRL Dashboard</span>
+  <button class="tab-btn active" data-tab="tab-nn">神經網路</button>
+  <button class="tab-btn" data-tab="tab-ppo">PPO 超參數</button>
+  <button class="tab-btn" data-tab="tab-curriculum">課程學習</button>
+  <button class="tab-btn" data-tab="tab-rewards">獎勵函數</button>
+  <button class="tab-btn" data-tab="tab-actions">動作空間</button>
+  <button class="tab-btn" data-tab="tab-obs">觀測空間</button>
+  <button class="tab-btn" data-tab="tab-ablation">消融實驗</button>
+  <button class="tab-btn" data-tab="tab-diagnostics">診斷指標</button>
+  <button class="tab-btn" data-tab="tab-env">環境場景</button>
+  <button class="tab-btn" data-tab="tab-wandb">WandB 指標</button>
+  <button class="tab-btn" data-tab="tab-cadn">CADN</button>
+</nav>
+
+<div class="content">
+
+<!-- ══════════════ CLI 配置概覽 (全局 Banner) ══════════════ -->
+<div class="cli-banner">
+  <div class="banner-title">當前訓練配置</div>
+  <div class="cli-tag">
+    <span class="label">獎勵模式</span>
+    <span class="value" style="color: var(--accent-green);">{{ cfg.cli.reward_mode }}</span>
+  </div>
+  <div class="cli-tag">
+    <span class="label">課程版本</span>
+    <span class="value" style="color: var(--accent-cyan);">{{ cfg.cli.curriculum_version }}</span>
+  </div>
+  <div class="cli-tag">
+    <span class="label">動態安全</span>
+    <span class="value" style="color: var(--accent-orange);">{{ cfg.cli.dynamic_safety_mode }}</span>
+  </div>
+  <div class="cli-tag">
+    <span class="label">環境數</span>
+    <span class="value">{{ "{:,}".format(cfg.cli.num_envs) }}</span>
+  </div>
+  <div class="cli-tag">
+    <span class="label">Seed</span>
+    <span class="value">{{ cfg.cli.seed }}</span>
+  </div>
+  <div class="cli-tag">
+    <span class="label">Run Name</span>
+    <span class="value" style="font-size: 11px;">{{ cfg.cli.run_name }}</span>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<!--  TAB 1: 神經網路架構                                                    -->
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<div id="tab-nn" class="tab-panel active">
+  <div class="section">
+    <h2 class="section-title">神經網路架構 — VLP16 3-Branch Feature Extractor</h2>
+
+    <div class="nn-svg-container">
+      {{ cfg.nn_svg | safe }}
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <!-- Observation Layout -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">觀測向量分解 (139D)</span>
+      </div>
+      <div class="obs-bar">
+        {% for seg in cfg.nn.obs_layout %}
+        <div class="seg" style="flex: {{ seg.dim }}; background: {{ seg.color }};">
+          {{ seg.name }} ({{ seg.dim }}D)
+        </div>
+        {% endfor %}
+      </div>
+      <table>
+        <tr><th>Component</th><th>Dim</th><th>Range</th><th>Details</th></tr>
+        {% for seg in cfg.nn.obs_layout %}
+        <tr>
+          <td style="color: {{ seg.color }}; font-weight: 600;">{{ seg.name }}</td>
+          <td>{{ seg.dim }}D</td>
+          <td><code>[{{ seg.start }}:{{ seg.start + seg.dim }}]</code></td>
+          <td>{{ seg.fields | join(', ') }}</td>
+        </tr>
+        {% endfor %}
+      </table>
+    </div>
+
+    <!-- Parameter Counts -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">參數量統計</span>
+      </div>
+      <table>
+        <tr><th>Module</th><th>Parameters</th></tr>
+        {% for name, count in cfg.nn.param_counts.items() %}
+        <tr>
+          <td>{{ name }}</td>
+          <td><code>{{ count }}</code></td>
+        </tr>
+        {% endfor %}
+      </table>
+
+      <h3 class="section-subtitle">初始化策略</h3>
+      <table>
+        <tr><th>Layer</th><th>Method</th></tr>
+        <tr><td>Feature Extractor</td><td>PyTorch default (Kaiming)</td></tr>
+        <tr><td>Value Head (last)</td><td><code>orthogonal(gain=0.01), bias=-8.0</code></td></tr>
+        <tr><td>Policy Head</td><td>PyTorch default</td></tr>
+      </table>
+
+      <div class="info-box" style="margin-top: 12px;">
+        <strong>設計特點：</strong> Policy / Value 共享 Feature Extractor (128D)。
+        Obstacle 分支使用 MaxPool 聚合 → 置換不變 (permutation-invariant)。
+        無 Attention、無 Recurrence、單幀觀測。
+      </div>
+    </div>
+  </div>
+
+  <!-- Branch details -->
+  <div class="grid-3">
+    {% for branch in cfg.nn.feature_extractor.branches %}
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">{{ branch.name }}</span>
+        <span class="card-badge badge-neutral">{{ branch.input }} → {{ branch.output }}</span>
+      </div>
+      {% for layer in branch.layers %}
+      <div style="padding: 4px 0; font-size: 12px; color: var(--text-secondary);">
+        <code>{{ layer }}</code>
+      </div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<!--  TAB 2: PPO 超參數                                                      -->
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<div id="tab-ppo" class="tab-panel">
+  <div class="section">
+    <h2 class="section-title">PPO 超參數配置</h2>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Agent 參數</span>
+      </div>
+      <table>
+        <tr><th>Parameter</th><th>Value</th></tr>
+        <tr><td>Learning Rate</td><td><code>{{ cfg.ppo.agent.learning_rate }}</code> → <code>{{ (cfg.ppo.agent.learning_rate * cfg.ppo.agent.lr_end_factor) | round(6) }}</code></td></tr>
+        <tr><td>LR Scheduler</td><td><code>{{ cfg.ppo.agent.lr_scheduler }}</code></td></tr>
+        <tr><td>Discount Factor (γ)</td><td><code>{{ cfg.ppo.agent.discount_factor }}</code> → 0.998 (curriculum)</td></tr>
+        <tr><td>GAE Lambda (λ)</td><td><code>{{ cfg.ppo.agent.lambda_gae }}</code></td></tr>
+        <tr><td>Rollout Steps</td><td><code>{{ cfg.ppo.agent.rollouts }}</code></td></tr>
+        <tr><td>Learning Epochs</td><td><code>{{ cfg.ppo.agent.learning_epochs }}</code></td></tr>
+        <tr><td>Mini-batches</td><td><code>{{ cfg.ppo.agent.mini_batches }}</code></td></tr>
+        <tr><td>Entropy Loss Scale</td><td><code>{{ cfg.ppo.agent.entropy_loss_scale }}</code></td></tr>
+        <tr><td>Value Loss Scale</td><td><code>{{ cfg.ppo.agent.value_loss_scale }}</code></td></tr>
+        <tr><td>Gradient Norm Clip</td><td><code>{{ cfg.ppo.agent.grad_norm_clip }}</code></td></tr>
+        <tr><td>Ratio Clip (ε)</td><td><code>{{ cfg.ppo.agent.ratio_clip }}</code></td></tr>
+        <tr><td>Value Clip</td><td><code>{{ cfg.ppo.agent.value_clip }}</code></td></tr>
+        <tr><td>Clip Predicted Values</td><td><code>{{ cfg.ppo.agent.clip_predicted_values }}</code></td></tr>
+        <tr><td>State Preprocessor</td><td><code>{{ cfg.ppo.agent.state_preprocessor }}</code></td></tr>
+        <tr><td>Value Preprocessor</td><td><code>{{ cfg.ppo.agent.value_preprocessor }}</code></td></tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">訓練規模 &amp; 衍生計算</span>
+      </div>
+      <table>
+        <tr><th>Parameter</th><th>Value</th></tr>
+        <tr><td>Total Timesteps</td><td><code>{{ "{:,}".format(cfg.ppo.trainer.timesteps) }}</code></td></tr>
+        <tr><td>Checkpoint Interval</td><td><code>{{ "{:,}".format(cfg.ppo.trainer.checkpoint_interval) }}</code></td></tr>
+        <tr><td>Total Rollouts</td><td><code>{{ "{:,}".format(cfg.ppo.derived.total_rollouts) }}</code></td></tr>
+        <tr><td>Grad Steps / Rollout</td><td><code>{{ cfg.ppo.derived.grad_steps_per_rollout }}</code></td></tr>
+        <tr><td>Total Gradient Steps</td><td><code>{{ "{:,}".format(cfg.ppo.derived.total_grad_steps) }}</code></td></tr>
+        <tr><td>Effective Batch Size</td><td><code>{{ cfg.ppo.derived.effective_batch_size }}</code></td></tr>
+        <tr><td>Seed</td><td><code>{{ cfg.ppo.seed }}</code></td></tr>
+      </table>
+
+      <div class="info-box" style="margin-top: 12px;">
+        <strong>clip_predicted_values = False</strong>：避免大獎勵尺度 (±500) 下 value clip 梯度歸零。
+      </div>
+
+      <h3 class="section-subtitle">Learning Rate Schedule</h3>
+      <div id="chart-lr" class="chart-container" style="height: 250px;"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<!--  TAB 3: 課程學習                                                        -->
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<div id="tab-curriculum" class="tab-panel">
+  <div class="section">
+    <h2 class="section-title">課程學習 — 多版本階段設計</h2>
+
+    <div class="radio-group">
+      {% for version_name in cfg.curriculum %}
+      {% if version_name != '_error' %}
+      <input type="radio" name="cv" id="cv-{{ version_name }}" value="{{ version_name }}"
+             {{ 'checked' if loop.first }} onchange="switchCurriculumVersion('{{ version_name }}')">
+      <label for="cv-{{ version_name }}">{{ version_name }}</label>
+      {% endif %}
+      {% endfor %}
+    </div>
+
+    {% for version_name, version_cfg in cfg.curriculum.items() %}
+    {% if version_name != '_error' %}
+    <div class="curriculum-table" id="curriculum-table-{{ version_name }}"
+         style="{{ '' if loop.first else 'display:none' }}">
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">{{ version_name }} — {{ version_cfg.stages | length }} 階段</span>
+          <span class="card-badge badge-neutral">升級需連續 {{ version_cfg.upgrade_pass_required }} 次通過</span>
+        </div>
+        <table>
+          <tr>
+            <th>#</th><th>Name</th><th>Goals</th><th>Static</th><th>Dynamic</th>
+            <th>Walls</th><th>γ</th><th>Episode(s)</th><th>Empty%</th><th>↑SR</th><th>Min Updates</th>
+          </tr>
+          {% for s in version_cfg.stages %}
+          <tr>
+            <td><strong>{{ s.stage }}</strong></td>
+            <td>{{ s.name }}</td>
+            <td>{{ s.num_goals }}</td>
+            <td>{{ s.num_static }}</td>
+            <td>{{ s.num_dynamic }}</td>
+            <td>{{ s.min_walls }}-{{ s.max_walls }}</td>
+            <td><code>{{ s.gamma }}</code></td>
+            <td>{{ s.episode_s | int }}s</td>
+            <td>{{ (s.empty_ratio * 100) | int }}%</td>
+            <td><code>{{ (s.upgrade_sr * 100) | int }}%</code></td>
+            <td>{{ s.min_stage_updates }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+      </div>
+
+      {% if version_cfg.stages[0].reward_weights %}
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Stage-Dependent 獎勵權重</span>
+        </div>
+        <table>
+          <tr><th>#</th><th>Name</th>
+          {% for key in version_cfg.stages[0].reward_weights %}
+          <th>{{ key }}</th>
+          {% endfor %}
+          </tr>
+          {% for s in version_cfg.stages %}
+          {% if s.reward_weights %}
+          <tr>
+            <td>{{ s.stage }}</td><td>{{ s.name }}</td>
+            {% for key, val in s.reward_weights.items() %}
+            <td><code>{{ val }}</code></td>
+            {% endfor %}
+          </tr>
+          {% endif %}
+          {% endfor %}
+        </table>
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
+    {% endfor %}
+  </div>
+
+  <div class="grid-2">
+    <div class="chart-container" id="chart-curriculum-obs" style="height: 300px;"></div>
+    <div class="chart-container" id="chart-curriculum-gamma" style="height: 300px;"></div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<!--  TAB 4: 獎勵函數                                                        -->
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<div id="tab-rewards" class="tab-panel">
+  <div class="section">
+    <h2 class="section-title">獎勵函數架構 — {{ cfg.cli.reward_mode_zh }}</h2>
+
+    <div class="info-box">
+      <strong>當前模式：</strong><code>{{ cfg.cli.reward_mode }}</code> +
+      <code>dynamic_safety_mode={{ cfg.cli.dynamic_safety_mode }}</code>
+      <br>
+      <strong>行為期望值排序：</strong>
+      安全前進 &gt;&gt; 安全接近目標 &gt;&gt; 原地不動 (~0) &gt;&gt; 危險前進 &gt;&gt; 碰撞 (-50 terminal)
+    </div>
+  </div>
+
+  <!-- 獎勵模式對比表 -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">獎勵模式權重對比（v1 → v4）</span>
+    </div>
+    <table>
+      <tr>
+        <th>獎勵項目</th>
+        {% for mode_name, mode_cfg in cfg.reward_modes.modes.items() %}
+        <th {% if mode_name == cfg.cli.reward_mode %}style="color: var(--accent-green); background: rgba(158,206,106,0.1);"{% endif %}>
+          {{ mode_name }}{% if mode_name == cfg.cli.reward_mode %} ★{% endif %}
+        </th>
+        {% endfor %}
+      </tr>
+      {% for term in cfg.reward_modes.terms %}
+      <tr {% if term in ['reaching_goal', 'collision_ground', 'alive'] %}style="background: rgba(122,162,247,0.05);"{% endif %}>
+        <td><code>{{ term }}</code></td>
+        {% for mode_name, mode_cfg in cfg.reward_modes.modes.items() %}
+        <td {% if mode_name == cfg.cli.reward_mode %}style="font-weight: 700; color: var(--accent-green);"{% endif %}>
+          {{ mode_cfg.weights[term] }}
+        </td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </table>
+    <div style="margin-top: 8px; font-size: 11px; color: var(--text-muted);">
+      {% for mode_name, mode_cfg in cfg.reward_modes.modes.items() %}
+      <div style="margin-bottom: 4px;"><strong>{{ mode_name }}</strong>: {{ mode_cfg.desc_zh }}</div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- v2 特有參數說明 -->
+  {% set v2 = cfg.reward_modes.modes.get(cfg.cli.reward_mode, {}) %}
+  {% if v2.notes %}
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">{{ cfg.cli.reward_mode }} 特有參數</span>
+      <span class="card-badge badge-positive">當前使用</span>
+    </div>
+    <table>
+      <tr><th>獎勵項目</th><th>特殊設定</th></tr>
+      {% for term, note in v2.notes.items() %}
+      <tr><td><code>{{ term }}</code></td><td>{{ note }}</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endif %}
+
+  {% for r in cfg.rewards %}
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">{{ r.name_zh }}（<code>{{ r.name }}</code>）</span>
+      <span class="card-badge {{ 'badge-positive' if r.sign == '+' else 'badge-negative' }}">
+        w = {{ r.sign }}{{ r.weight }}
+      </span>
+    </div>
+    <div class="formula-box">
+      \[ {{ r.formula }} \]
+    </div>
+    {% if r.get('gate_formula') %}
+    <h4 style="color: var(--accent-yellow); font-size: 12px; margin: 8px 0 4px;">Safety Gate:</h4>
+    <div class="formula-box">
+      \[ {{ r.gate_formula }} \]
+    </div>
+    {% endif %}
+    <p style="color: var(--text-secondary); font-size: 12px; margin: 8px 0;">{{ r.description }}</p>
+    {% if r.params %}
+    <table>
+      <tr><th>Parameter</th><th>Value</th></tr>
+      {% for pname, pval in r.params.items() %}
+      <tr><td>{{ pname }}</td><td><code>{{ pval }}</code></td></tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+    <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">
+      Per-step range: <code>{{ r.range }}</code>
+    </div>
+  </div>
+  {% endfor %}
+
+  <div class="grid-2">
+    <div class="chart-container" id="chart-vgate" style="height: 280px;"></div>
+    <div class="chart-container" id="chart-pgate" style="height: 280px;"></div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<!--  TAB 5: 動作空間                                                        -->
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<div id="tab-actions" class="tab-panel">
+  <div class="section">
+    <h2 class="section-title">動作空間 — {{ cfg.actions.type }}</h2>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">物理限制</span>
+      </div>
+      <table>
+        <tr><th>Parameter</th><th>Value</th></tr>
+        {% for k, v in cfg.actions.physical_limits.items() %}
+        <tr><td>{{ k }}</td><td><code>{{ v }}</code></td></tr>
+        {% endfor %}
+      </table>
+
+      <h3 class="section-subtitle">Dynamic Acceleration Bounds</h3>
+      <div class="formula-box">
+        \[ {{ cfg.actions.dynamic_bounds_formula }} \]
+      </div>
+
+      <h3 class="section-subtitle">Index → Physical Mapping</h3>
+      <div style="font-size: 12px; color: var(--text-secondary); padding: 8px 0;">
+        {% for axis in cfg.actions.axes %}
+        <div style="margin-bottom: 4px;">
+          <code>{{ axis.name }}</code>: {{ axis.bins }} bins, range {{ axis.physical_range }}<br>
+          <span class="text-muted">{{ axis.mapping }}</span>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">19×19 Action Heatmap</span>
+      </div>
+      <div id="chart-action-heatmap" style="height: 350px;"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">安全盾牌模式 (Ablation Family 4)</span>
+    </div>
+    <table>
+      <tr><th>Mode</th><th>Description</th><th>d_safe</th><th>d_danger</th></tr>
+      {% for s in cfg.actions.safety_shield %}
+      <tr>
+        <td><code>{{ s.mode }}</code></td>
+        <td>{{ s.description }}</td>
+        <td>{{ s.get('d_safe', '—') }}</td>
+        <td>{{ s.get('d_danger', '—') }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<!--  TAB 6: 觀測空間                                                        -->
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<div id="tab-obs" class="tab-panel">
+  <div class="section">
+    <h2 class="section-title">觀測空間 — {{ cfg.observations.total_dim }}D</h2>
+
+    <div class="obs-bar">
+      {% for seg in cfg.nn.obs_layout %}
+      <div class="seg" style="flex: {{ seg.dim }}; background: {{ seg.color }};">
+        {{ seg.name }} ({{ seg.dim }}D)
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">LiDAR 處理流水線</span>
+        <span class="card-badge badge-neutral">VLP-16 → 72D</span>
+      </div>
+      <table>
+        <tr><th>#</th><th>Step</th><th>Detail</th></tr>
+        {% for step in cfg.observations.lidar_pipeline %}
+        <tr>
+          <td>{{ loop.index }}</td>
+          <td><strong>{{ step.step }}</strong></td>
+          <td>{{ step.detail }}</td>
+        </tr>
+        {% endfor %}
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">障礙物特徵 (6D per object × 10)</span>
+        <span class="card-badge badge-neutral">Body Frame</span>
+      </div>
+      <table>
+        <tr><th>Field</th><th>Description</th><th>Normalization</th></tr>
+        {% for f in cfg.observations.obstacle_features %}
+        <tr>
+          <td><code>{{ f.field }}</code></td>
+          <td>{{ f.desc }}</td>
+          <td><code>{{ f.norm }}</code></td>
+        </tr>
+        {% endfor %}
+      </table>
+
+      <h3 class="section-subtitle">Body-Frame 旋轉公式</h3>
+      <div class="formula-box">
+        \[ {{ cfg.observations.body_frame_rotation }} \]
+      </div>
+
+      <div class="info-box">
+        <strong>LOS Occlusion:</strong> 被牆壁遮蔽的障礙物 mask=0（全零填充）。
+        Top-10 按距離排序，不足 10 個以零填充。MaxPool 聚合確保置換不變。
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<!--  TAB 7: 消融實驗                                                        -->
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<div id="tab-ablation" class="tab-panel">
+  <div class="section">
+    <h2 class="section-title">消融實驗 — 4 Family × 多 Variant</h2>
+    <div class="info-box">
+      所有實驗使用相同 <code>--task Isaac-Navigation-Charge-VLP16-Curriculum-NavRL</code>，僅靠 CLI 參數切換 variant。
+      命名慣例：<code>abl{N}_{family}-{variant}_s{seed}_ne{envs}</code>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    {% for family in cfg.ablation %}
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Family {{ family.id }}: {{ family.name_zh }}</span>
+        <span class="card-badge badge-neutral">{{ family.name }}</span>
+      </div>
+      <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">
+        CLI: <code>{{ family.cli_arg }}</code>
+      </p>
+      <table>
+        <tr><th>Variant</th><th>Parameters</th><th>Description</th></tr>
+        {% for v in family.variants %}
+        <tr>
+          <td><code>{{ v.name }}</code></td>
+          <td style="font-size: 11px;"><code>{{ v.params }}</code></td>
+          <td style="font-size: 12px;">{{ v.desc }}</td>
+        </tr>
+        {% endfor %}
+      </table>
+
+      {% if family.id == 1 %}
+      <h4 style="color: var(--text-muted); font-size: 11px; margin-top: 12px;">Example CLI:</h4>
+      <div class="code-block"><button class="copy-btn">Copy</button><code>PYTHONUNBUFFERED=1 ./isaaclab.sh -p scripts/reinforcement_learning/skrl/train_charge_ac.py \
+  --task Isaac-Navigation-Charge-VLP16-Curriculum-NavRL --num_envs 512 --headless --seed 1 \
+  --run_name abl1_vgate-floor_s1_ne512 --v_gate_mode floor</code></div>
+      {% elif family.id == 2 %}
+      <h4 style="color: var(--text-muted); font-size: 11px; margin-top: 12px;">Example CLI:</h4>
+      <div class="code-block"><button class="copy-btn">Copy</button><code>PYTHONUNBUFFERED=1 ./isaaclab.sh -p scripts/reinforcement_learning/skrl/train_charge_ac.py \
+  --task Isaac-Navigation-Charge-VLP16-Curriculum-NavRL --num_envs 512 --headless --seed 1 \
+  --run_name abl2_progress-delayed_neg_s1_ne512 --progress_gate_mode delayed_negative</code></div>
+      {% elif family.id == 3 %}
+      <h4 style="color: var(--text-muted); font-size: 11px; margin-top: 12px;">Example CLI:</h4>
+      <div class="code-block"><button class="copy-btn">Copy</button><code>PYTHONUNBUFFERED=1 ./isaaclab.sh -p scripts/reinforcement_learning/skrl/train_charge_ac.py \
+  --task Isaac-Navigation-Charge-VLP16-Curriculum-NavRL --num_envs 512 --headless --seed 1 \
+  --run_name abl3_gap-heading_w1.0_s1_ne512 --use_gap_reward --gap_reward_type heading --gap_reward_weight 1.0</code></div>
+      {% elif family.id == 4 %}
+      <h4 style="color: var(--text-muted); font-size: 11px; margin-top: 12px;">Example CLI:</h4>
+      <div class="code-block"><button class="copy-btn">Copy</button><code>PYTHONUNBUFFERED=1 ./isaaclab.sh -p scripts/reinforcement_learning/skrl/train_charge_ac.py \
+  --task Isaac-Navigation-Charge-VLP16-Curriculum-NavRL --num_envs 512 --headless --seed 1 \
+  --run_name abl4_shield-soft_s1_ne512 --use_safety_shield --shield_mode soft</code></div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<!--  TAB 8: 診斷指標                                                        -->
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<div id="tab-diagnostics" class="tab-panel">
+  <div class="section">
+    <h2 class="section-title">診斷指標 — AblationMetricsLogger</h2>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">行為分析指標 (15 項)</span>
+      <span class="card-badge badge-neutral">WandB ablation/*</span>
+    </div>
+    <table>
+      <tr><th>#</th><th>WandB Key</th><th>Name</th><th>Calculation</th><th>Range</th></tr>
+      {% for m in cfg.diagnostics.metrics %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td><code>{{ m.key }}</code></td>
+        <td>{{ m.name }}</td>
+        <td style="font-size: 11px;">{{ m.formula }}</td>
+        <td><code>{{ m.range }}</code></td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">閾值常數</span>
+    </div>
+    <table>
+      <tr><th>Constant</th><th>Value</th></tr>
+      {% for k, v in cfg.diagnostics.thresholds.items() %}
+      <tr><td><code>{{ k }}</code></td><td><code>{{ v }}</code></td></tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<!--  TAB 9: 環境場景                                                        -->
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<div id="tab-env" class="tab-panel">
+  <div class="section">
+    <h2 class="section-title">環境場景 — {{ cfg.environment.arena.width }}×{{ cfg.environment.arena.height }}m Arena</h2>
+  </div>
+
+  <div class="grid-2">
+    <div class="chart-container" id="chart-scene" style="height: 450px;"></div>
+
+    <div>
+      <div class="card">
+        <div class="card-header"><span class="card-title">場景參數</span></div>
+        <table>
+          <tr><th>Category</th><th>Parameter</th><th>Value</th></tr>
+          <tr><td rowspan="3">Arena</td><td>Size</td><td><code>{{ cfg.environment.arena.width }}×{{ cfg.environment.arena.height }}m</code></td></tr>
+          <tr><td>Wall Thickness</td><td><code>{{ cfg.environment.arena.wall_thickness }}m</code></td></tr>
+          <tr><td>Wall Height</td><td><code>{{ cfg.environment.arena.wall_height }}m</code></td></tr>
+          <tr><td rowspan="3">Robot</td><td>Body Radius</td><td><code>{{ cfg.environment.robot.body_radius }}m</code></td></tr>
+          <tr><td>Collision Threshold</td><td><code>{{ cfg.environment.robot.collision_threshold }}m</code></td></tr>
+          <tr><td>Goal Reach Threshold</td><td><code>{{ cfg.environment.robot.goal_reach_threshold }}m</code></td></tr>
+          <tr><td rowspan="3">Obstacles</td><td>Max Total</td><td><code>{{ cfg.environment.obstacles.max_total }}</code></td></tr>
+          <tr><td>Cuboid Sizes</td><td>{{ cfg.environment.obstacles.cuboid_sizes }}</td></tr>
+          <tr><td>Cylinder Sizes</td><td>{{ cfg.environment.obstacles.cylinder_sizes }}</td></tr>
+          <tr><td rowspan="2">Internal Walls</td><td>Max Slots</td><td><code>{{ cfg.environment.internal_walls.max_slots }}</code></td></tr>
+          <tr><td>Thickness</td><td><code>{{ cfg.environment.internal_walls.thickness }}m</code></td></tr>
+        </table>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><span class="card-title">仿真參數</span></div>
+        <table>
+          <tr><th>Parameter</th><th>Value</th></tr>
+          {% for k, v in cfg.environment.simulation.items() %}
+          <tr><td>{{ k }}</td><td><code>{{ v }}</code></td></tr>
+          {% endfor %}
+        </table>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><span class="card-title">目標命令生成</span></div>
+        <table>
+          <tr><th>Parameter</th><th>Value</th></tr>
+          {% for k, v in cfg.environment.goal_command.items() %}
+          <tr><td>{{ k }}</td><td><code>{{ v }}</code></td></tr>
+          {% endfor %}
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<!--  TAB 10: WandB 指標紀錄                                                   -->
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<div id="tab-wandb" class="tab-panel">
+  <div class="section">
+    <h2 class="section-title">WandB 指標紀錄 — 訓練監控完整指南</h2>
+    <div class="info-box">
+      以下列出訓練過程中記錄到 WandB 的所有關鍵指標。每項指標附有<strong>理想數值</strong>、
+      <strong>好的趨勢</strong>與<strong>壞的信號</strong>，幫助你快速判斷訓練是否健康。
+      <br>
+      <span class="status-dot good"></span><strong>綠色</strong>: 理想範圍 &nbsp;
+      <span class="status-dot warn"></span><strong>黃色</strong>: 需注意 &nbsp;
+      <span class="status-dot bad"></span><strong>紅色</strong>: 問題信號
+    </div>
+  </div>
+
+  {% for cat in cfg.wandb_metrics.categories %}
+  <div class="card">
+    <div class="metric-category-header">
+      {{ cat.icon }} {{ cat.name_zh }}（<code>{{ cat.id }}/*</code>）
+    </div>
+    <table class="metric-table">
+      <tr>
+        <th>WandB Key</th>
+        <th>名稱</th>
+        <th>理想值</th>
+        <th style="color: var(--accent-green);">好的趨勢</th>
+        <th style="color: var(--accent-red);">壞的信號</th>
+        <th>值域</th>
+      </tr>
+      {% for m in cat.metrics %}
+      <tr>
+        <td><code>{{ m.key }}</code></td>
+        <td><strong>{{ m.name_zh }}</strong></td>
+        <td>{{ m.ideal }}</td>
+        <td style="font-size: 12px; color: var(--accent-green);">{{ m.good_trend }}</td>
+        <td style="font-size: 12px; color: var(--accent-red);">{{ m.bad_signal }}</td>
+        <td><code>{{ m.range }}</code></td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endfor %}
+
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">訓練階段性指標判讀指南</span>
+    </div>
+    <table>
+      <tr><th>訓練階段</th><th>關鍵觀察指標</th><th>正常表現</th><th>警告信號</th></tr>
+      <tr>
+        <td><strong>Stage 1-2（純導航）</strong></td>
+        <td><code>perf/success_rate</code>, <code>robot/speed_mean</code></td>
+        <td>SR 快速上升至 >85%，速度穩定 0.5-0.8 m/s</td>
+        <td>SR 停在 <50%：goal_velocity/progress 獎勵信號太弱</td>
+      </tr>
+      <tr>
+        <td><strong>Stage 3-4（靜態避障）</strong></td>
+        <td><code>perf/collision_rate</code>, <code>behavior/danger_zone_ratio</code></td>
+        <td>CR 下降至 <30%，danger_zone <15%</td>
+        <td>CR >50%：static_safety 權重不足或 LiDAR 處理有誤</td>
+      </tr>
+      <tr>
+        <td><strong>Stage 5+（動態避障）</strong></td>
+        <td><code>Reward/dynamic_safety</code>, <code>behavior/oscillation</code></td>
+        <td>dynamic_safety 正值，oscillation <0.3</td>
+        <td>oscillation >0.5：closing_risk 讓 agent 過度恐懼動態物體</td>
+      </tr>
+      <tr>
+        <td><strong>全程監控</strong></td>
+        <td><code>train/module_entropy</code>, <code>train/actor_grad_norm</code></td>
+        <td>module_entropy ∈ [-1, 1]，grad_norm 非零</td>
+        <td>actor_grad→0：策略死亡，需提高 entropy 或降低 LR 衰減速度</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">closing_risk 模式特有指標關注點</span>
+    </div>
+    <div class="formula-box">
+      \[ r_{\text{dynamic}} = b_{\log} \cdot \overline{\ln(\text{clearance}_i)} - b_{\text{risk}} \cdot \overline{\max(0,\; \dot{d}_{\text{close},i}) \cdot e^{-\text{clearance}_i / \sigma}} \]
+    </div>
+    <div class="info-box">
+      <strong>closing_risk</strong> 比 log_distance 模式多一個「接近速率懲罰」項。
+      當動態障礙物<strong>正在靠近</strong>（closing_rate > 0）時，懲罰隨指數衰減放大。
+      <br><br>
+      <strong>監控重點：</strong>
+      <ul style="margin: 8px 0 0 20px; font-size: 12px;">
+        <li><code>Reward/dynamic_safety</code>：Phase C 初期可能為負值（正常），應在 ~200 rollouts 後轉正</li>
+        <li><code>behavior/retreat_ratio</code>：closing_risk 可能導致過度退縮，若 >0.2 考慮降低 risk_sigma</li>
+        <li><code>behavior/oscillation</code>：closing_risk 的方向性懲罰可能加劇擺盪</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<!--  TAB 11: CADN — Curriculum-Aware Dual-Rate Normalizer                  -->
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<div id="tab-cadn" class="tab-panel">
+
+  <!-- ── Section 1: 概述 ── -->
+  <div class="section">
+    <h2 class="section-title">CADN — {{ cfg.cadn.full_name }}</h2>
+    <div class="info-box">
+      <strong>Drop-in 替代</strong> <code>{{ cfg.cadn.replaces }}</code>，
+      針對課程學習（Curriculum Learning）中觀測分布突變問題設計。
+      透過 <strong>Per-Branch 雙速率 EMA</strong> + <strong>Drift 自適應混合</strong>，
+      在課程跳階時快速追蹤新分布，穩定階段則使用長期基線，避免正規化偏移導致策略崩潰。
+      <br><br>
+      <strong>啟用方式：</strong>
+      <code>{{ cfg.cadn.cli_flag }}</code>（預設關閉，使用 RunningStandardScaler）
+      <br>
+      <strong>原始碼：</strong>
+      <code>{{ cfg.cadn.source_file }}</code>
+    </div>
+  </div>
+
+  <!-- ── Section 2: 實驗動機 ── -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">實驗動機 — 為什麼需要 CADN？</span>
+      <span class="card-badge badge-neutral">Motivation</span>
+    </div>
+    <div class="info-box" style="border-left-color: var(--accent-red);">
+      <strong>問題：</strong>{{ cfg.cadn.motivation.problem }}
+    </div>
+    <table>
+      <tr><th>Root Cause</th><th>問題描述</th></tr>
+      {% for rc in cfg.cadn.motivation.root_causes %}
+      <tr>
+        <td><code>{{ rc.id }}</code> — <strong>{{ rc.title }}</strong></td>
+        <td style="font-size: 12px;">{{ rc.desc }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  <!-- ── Section 3: 設計原理 ── -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">設計原理 — {{ cfg.cadn.design.dual_rate_ema.title }}</span>
+      <span class="card-badge badge-neutral">Algorithm</span>
+    </div>
+
+    <div class="grid-2" style="gap: 12px; margin-bottom: 16px;">
+      <div class="info-box" style="border-left-color: var(--accent-cyan);">
+        <strong>Fast Channel (α<sub>f</sub>)：</strong>{{ cfg.cadn.design.dual_rate_ema.fast_desc }}
+      </div>
+      <div class="info-box" style="border-left-color: var(--accent-purple);">
+        <strong>Slow Channel (α<sub>s</sub>)：</strong>{{ cfg.cadn.design.dual_rate_ema.slow_desc }}
+      </div>
+    </div>
+
+    <h3 class="section-subtitle">EMA 更新公式</h3>
+    <div class="formula-box">
+      \[ {{ cfg.cadn.design.dual_rate_ema.formula_update }} \]
+    </div>
+
+    <h3 class="section-subtitle">Drift 偵測（正規化歐式距離）</h3>
+    <div class="formula-box">
+      \[ {{ cfg.cadn.design.dual_rate_ema.formula_drift }} \]
+    </div>
+
+    <h3 class="section-subtitle">自適應混合權重</h3>
+    <div class="formula-box">
+      \[ {{ cfg.cadn.design.dual_rate_ema.formula_blend }} \]
+    </div>
+
+    <h3 class="section-subtitle">混合統計量 & 正規化</h3>
+    <div class="formula-box">
+      \[ {{ cfg.cadn.design.dual_rate_ema.formula_output }} \]
+    </div>
+    <div class="formula-box">
+      \[ {{ cfg.cadn.design.dual_rate_ema.formula_normalize }} \]
+    </div>
+
+    <div class="info-box" style="border-left-color: var(--accent-green);">
+      <strong>{{ cfg.cadn.design.per_branch.title }}：</strong>{{ cfg.cadn.design.per_branch.desc }}
+    </div>
+  </div>
+
+  <!-- ── Section 4: Per-Branch 架構 ── -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Per-Branch 架構 — 3 語義分支</span>
+      <span class="card-badge badge-neutral">139D → 7D + 72D + 60D</span>
+    </div>
+
+    <!-- Branch architecture SVG diagram -->
+    <div style="text-align: center; margin: 16px 0;">
+      <svg viewBox="0 0 740 220" style="max-width: 720px; width: 100%;">
+        <!-- Input -->
+        <rect x="10" y="85" width="100" height="50" rx="6" fill="#1a1b26" stroke="#7aa2f7" stroke-width="2"/>
+        <text x="60" y="115" text-anchor="middle" fill="#c0caf5" font-size="13" font-weight="600">139D Input</text>
+
+        <!-- Arrows from input to branches -->
+        <line x1="110" y1="95" x2="175" y2="40" stroke="#565f89" stroke-width="1.5" marker-end="url(#arrow-cadn)"/>
+        <line x1="110" y1="110" x2="175" y2="110" stroke="#565f89" stroke-width="1.5" marker-end="url(#arrow-cadn)"/>
+        <line x1="110" y1="125" x2="175" y2="180" stroke="#565f89" stroke-width="1.5" marker-end="url(#arrow-cadn)"/>
+
+        <!-- State branch -->
+        <rect x="180" y="15" width="170" height="50" rx="6" fill="#292e42" stroke="#9ece6a" stroke-width="2"/>
+        <text x="265" y="35" text-anchor="middle" fill="#9ece6a" font-size="12" font-weight="600">State (7D)</text>
+        <text x="265" y="52" text-anchor="middle" fill="#787c99" font-size="10">α_f=0.008  α_s=0.0003</text>
+
+        <!-- LiDAR branch -->
+        <rect x="180" y="85" width="170" height="50" rx="6" fill="#292e42" stroke="#7aa2f7" stroke-width="2"/>
+        <text x="265" y="105" text-anchor="middle" fill="#7aa2f7" font-size="12" font-weight="600">LiDAR (72D)</text>
+        <text x="265" y="122" text-anchor="middle" fill="#787c99" font-size="10">α_f=0.005  α_s=0.0002</text>
+
+        <!-- Obstacle branch -->
+        <rect x="180" y="155" width="170" height="50" rx="6" fill="#292e42" stroke="#ff9e64" stroke-width="2"/>
+        <text x="265" y="175" text-anchor="middle" fill="#ff9e64" font-size="12" font-weight="600">Obstacle (60D)</text>
+        <text x="265" y="192" text-anchor="middle" fill="#787c99" font-size="10">α_f=0.01  α_s=0.0005</text>
+
+        <!-- Dual-rate boxes -->
+        <rect x="390" y="15" width="130" height="50" rx="6" fill="#1a1b26" stroke="#9ece6a" stroke-width="1.5" stroke-dasharray="4,3"/>
+        <text x="455" y="35" text-anchor="middle" fill="#9ece6a" font-size="10">DualRateEMA</text>
+        <text x="455" y="50" text-anchor="middle" fill="#787c99" font-size="9">τ=[0.25, 0.55]</text>
+
+        <rect x="390" y="85" width="130" height="50" rx="6" fill="#1a1b26" stroke="#7aa2f7" stroke-width="1.5" stroke-dasharray="4,3"/>
+        <text x="455" y="105" text-anchor="middle" fill="#7aa2f7" font-size="10">DualRateEMA</text>
+        <text x="455" y="120" text-anchor="middle" fill="#787c99" font-size="9">τ=[0.30, 0.60]</text>
+
+        <rect x="390" y="155" width="130" height="50" rx="6" fill="#1a1b26" stroke="#ff9e64" stroke-width="1.5" stroke-dasharray="4,3"/>
+        <text x="455" y="175" text-anchor="middle" fill="#ff9e64" font-size="10">DualRateEMA</text>
+        <text x="455" y="190" text-anchor="middle" fill="#787c99" font-size="9">τ=[0.20, 0.50]  ε=1e-6</text>
+
+        <!-- Arrows to dual-rate -->
+        <line x1="350" y1="40" x2="388" y2="40" stroke="#565f89" stroke-width="1.5" marker-end="url(#arrow-cadn)"/>
+        <line x1="350" y1="110" x2="388" y2="110" stroke="#565f89" stroke-width="1.5" marker-end="url(#arrow-cadn)"/>
+        <line x1="350" y1="180" x2="388" y2="180" stroke="#565f89" stroke-width="1.5" marker-end="url(#arrow-cadn)"/>
+
+        <!-- Arrows to concat -->
+        <line x1="520" y1="40" x2="575" y2="95" stroke="#565f89" stroke-width="1.5" marker-end="url(#arrow-cadn)"/>
+        <line x1="520" y1="110" x2="575" y2="110" stroke="#565f89" stroke-width="1.5" marker-end="url(#arrow-cadn)"/>
+        <line x1="520" y1="180" x2="575" y2="125" stroke="#565f89" stroke-width="1.5" marker-end="url(#arrow-cadn)"/>
+
+        <!-- Concat & output -->
+        <rect x="580" y="85" width="140" height="50" rx="6" fill="#1a1b26" stroke="#bb9af7" stroke-width="2"/>
+        <text x="650" y="107" text-anchor="middle" fill="#bb9af7" font-size="12" font-weight="600">Reassemble</text>
+        <text x="650" y="123" text-anchor="middle" fill="#787c99" font-size="10">139D normalized</text>
+
+        <!-- Arrow marker -->
+        <defs>
+          <marker id="arrow-cadn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#565f89"/>
+          </marker>
+        </defs>
+      </svg>
+    </div>
+
+    <table>
+      <tr>
+        <th>Branch</th><th>Dims</th><th>Slice</th>
+        <th>α<sub>fast</sub></th><th>α<sub>slow</sub></th>
+        <th>τ<sub>lo</sub></th><th>τ<sub>hi</sub></th>
+        <th>ε</th><th>設計理由</th>
+      </tr>
+      {% for b in cfg.cadn.branches %}
+      <tr>
+        <td><strong>{{ b.name }}</strong></td>
+        <td>{{ b.dims }}</td>
+        <td><code>{{ b.slice }}</code></td>
+        <td><code>{{ b.alpha_fast }}</code></td>
+        <td><code>{{ b.alpha_slow }}</code></td>
+        <td><code>{{ b.tau_lo }}</code></td>
+        <td><code>{{ b.tau_hi }}</code></td>
+        <td><code>{{ b.epsilon }}</code></td>
+        <td style="font-size: 11px;">{{ b.rationale }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  <!-- ── Section 5: 對照比較 ── -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">{{ cfg.cadn.comparison.title }}</span>
+      <span class="card-badge badge-neutral">Comparison</span>
+    </div>
+    <table>
+      <tr>
+        <th>面向</th>
+        <th style="color: var(--accent-red);">RunningStandardScaler</th>
+        <th style="color: var(--accent-green);">CADN</th>
+      </tr>
+      {% for row in cfg.cadn.comparison.rows %}
+      <tr>
+        <td><strong>{{ row.aspect }}</strong></td>
+        <td style="font-size: 12px;">{{ row.rss }}</td>
+        <td style="font-size: 12px;">{{ row.cadn }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  <div class="grid-2">
+
+    <!-- ── Section 6: 實驗設計 ── -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">實驗設計</span>
+        <span class="card-badge badge-neutral">Experiment</span>
+      </div>
+      <div class="info-box" style="border-left-color: var(--accent-cyan);">
+        <strong>假說：</strong>{{ cfg.cadn.experiment_design.hypothesis }}
+      </div>
+      <table>
+        <tr><th>項目</th><th>內容</th></tr>
+        <tr><td><strong>Control</strong></td><td>{{ cfg.cadn.experiment_design.control }}</td></tr>
+        <tr><td><strong>Treatment</strong></td><td>{{ cfg.cadn.experiment_design.treatment }}</td></tr>
+      </table>
+
+      <h4 style="color: var(--text-muted); font-size: 12px; margin-top: 12px;">比較指標</h4>
+      <ul style="margin: 4px 0 0 16px; font-size: 12px; color: var(--text-secondary);">
+        {% for m in cfg.cadn.experiment_design.metrics_to_compare %}
+        <li><code>{{ m }}</code></li>
+        {% endfor %}
+      </ul>
+
+      <h4 style="color: var(--text-muted); font-size: 12px; margin-top: 12px;">預期結果</h4>
+      <ul style="margin: 4px 0 0 16px; font-size: 12px; color: var(--accent-green);">
+        {% for e in cfg.cadn.experiment_design.expected_outcome %}
+        <li>{{ e }}</li>
+        {% endfor %}
+      </ul>
+
+      <h4 style="color: var(--text-muted); font-size: 11px; margin-top: 16px;">Example CLI:</h4>
+      <div class="code-block"><button class="copy-btn">Copy</button><code>PYTHONUNBUFFERED=1 ./isaaclab.sh -p scripts/reinforcement_learning/skrl/train_charge_ac.py \
+  --task Isaac-Navigation-Charge-VLP16-Curriculum-NavRL --num_envs 512 --headless --seed 1 \
+  --run_name cadn_vs_rss_cadn_s1_ne512 --use_cadn</code></div>
+    </div>
+
+    <!-- ── Section 7: WandB 指標分析 (chart placeholder) ── -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Drift & Blend 響應示意</span>
+        <span class="card-badge badge-neutral">Plotly Chart</span>
+      </div>
+      <div class="chart-container" id="chart-cadn-drift" style="height: 350px;"></div>
+      <div class="info-box" style="font-size: 11px;">
+        <strong>讀圖方式：</strong>
+        圖表模擬課程跳階時 drift 上升觸發 blend weight 從 slow → fast 的自適應切換。
+        τ<sub>lo</sub> 以下全用 slow channel，τ<sub>hi</sub> 以上全用 fast channel，中間線性內插。
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Section 8: WandB 指標明細 ── -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">CADN WandB 指標明細</span>
+      <span class="card-badge badge-neutral">cadn/*</span>
+    </div>
+    <table class="metric-table">
+      <tr>
+        <th>WandB Key</th>
+        <th>名稱</th>
+        <th>說明</th>
+        <th>理想值</th>
+        <th style="color: var(--accent-green);">好的信號</th>
+        <th style="color: var(--accent-red);">壞的信號</th>
+        <th>值域</th>
+      </tr>
+      {% for m in cfg.cadn.wandb_metrics %}
+      <tr>
+        <td><code>{{ m.key }}</code></td>
+        <td><strong>{{ m.name_zh }}</strong></td>
+        <td style="font-size: 11px;">{{ m.desc }}</td>
+        <td>{{ m.ideal }}</td>
+        <td style="font-size: 12px; color: var(--accent-green);">{{ m.good_signal }}</td>
+        <td style="font-size: 12px; color: var(--accent-red);">{{ m.bad_signal }}</td>
+        <td><code>{{ m.range }}</code></td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  <!-- ── Section 9: 訓練階段判讀 ── -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">課程階段 × CADN 指標判讀指南</span>
+    </div>
+    <table>
+      <tr><th>訓練階段</th><th>CADN 預期行為</th><th>正常表現</th><th>警告信號</th></tr>
+      <tr>
+        <td><strong>Phase 1-2（純導航）</strong></td>
+        <td>obstacle drift ≈0（無障礙物），state/lidar drift 低</td>
+        <td>所有 blend weight ≈0（穩定用 slow）</td>
+        <td>obstacle blend >0 = ε 設定問題，零填充未正確處理</td>
+      </tr>
+      <tr>
+        <td><strong>Phase 2→3（首次加障礙物）</strong></td>
+        <td>obstacle drift spike（0→2 obstacles），lidar drift 上升</td>
+        <td>drift spike 後 50~100 steps 回落，blend 自動切 fast</td>
+        <td>drift 持續 >0.5 超過 200 steps = α_f 不夠快</td>
+      </tr>
+      <tr>
+        <td><strong>Phase 5+（高密度障礙）</strong></td>
+        <td>三個分支 drift 都有輕微升高（分布漸變）</td>
+        <td>drift ∈ [0.1, 0.3]，blend 在 0~0.3 間</td>
+        <td>lidar drift >0.6 + collision_rate 上升 = 正規化失效</td>
+      </tr>
+      <tr>
+        <td><strong>全程監控</strong></td>
+        <td>drift 呈現鋸齒波形（跳階 spike → 收斂 → 下次跳階）</td>
+        <td>每次 spike 振幅 ≤ 前次（分布變化漸趨穩定）</td>
+        <td>spike 振幅逐次增大 = 課程難度跳幅過大</td>
+      </tr>
+    </table>
+  </div>
+
+</div>
+
+</div><!-- end .content -->
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<!--  SCRIPTS                                                               -->
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<script src="/static/dashboard.js"></script>
+<script>
+  const CFG = {{ cfg_json | safe }};
+
+  // ── LR Schedule Chart ──
+  window._chartInits = window._chartInits || {};
+  window._chartInits['tab-ppo'] = function() {
+    const lr0 = CFG.ppo.agent.learning_rate;
+    const endF = CFG.ppo.agent.lr_end_factor;
+    const totalIters = CFG.ppo.agent.lr_total_iters || CFG.ppo.derived.total_grad_steps;
+    const xs = [], ys = [];
+    for (let i = 0; i <= totalIters; i += Math.max(1, Math.floor(totalIters/200))) {
+      xs.push(i);
+      ys.push(lr0 * (1.0 + (endF - 1.0) * Math.min(i / totalIters, 1.0)));
+    }
+    Plotly.newPlot('chart-lr', [{x: xs, y: ys, type: 'scatter', mode: 'lines',
+      line: {color: '#7aa2f7', width: 2}}],
+      mergeLayout({title: 'Learning Rate Schedule (LinearLR)',
+        xaxis: {title: 'Gradient Step', gridcolor: '#3b4261'},
+        yaxis: {title: 'LR', gridcolor: '#3b4261'}}), PLOTLY_CONFIG);
+  };
+
+  // ── Curriculum Charts ──
+  function _renderCurriculumCharts(version) {
+    const cv = CFG.curriculum[version];
+    if (!cv || !cv.stages) return;
+    const stages = cv.stages;
+    const labels = stages.map(s => 'S' + s.stage + ' ' + s.name);
+    // Stacked bar: static + dynamic
+    Plotly.newPlot('chart-curriculum-obs', [
+      {x: labels, y: stages.map(s => s.num_static), name: 'Static', type: 'bar',
+       marker: {color: '#ff9e64'}},
+      {x: labels, y: stages.map(s => s.num_dynamic), name: 'Dynamic', type: 'bar',
+       marker: {color: '#f7768e'}},
+    ], mergeLayout({title: '障礙物數量 (per stage)', barmode: 'stack',
+      xaxis: {gridcolor: '#3b4261'}, yaxis: {title: 'Count', gridcolor: '#3b4261'}}), PLOTLY_CONFIG);
+    // Gamma line
+    Plotly.newPlot('chart-curriculum-gamma', [
+      {x: labels, y: stages.map(s => s.gamma), type: 'scatter', mode: 'lines+markers',
+       line: {color: '#bb9af7', width: 2}, marker: {size: 6}},
+    ], mergeLayout({title: 'Discount Factor γ Evolution',
+      xaxis: {gridcolor: '#3b4261'}, yaxis: {title: 'γ', range: [0.988, 1.0], gridcolor: '#3b4261'}}), PLOTLY_CONFIG);
+  }
+  window._renderCurriculumCharts = _renderCurriculumCharts;
+
+  window._chartInits['tab-curriculum'] = function() {
+    const firstVersion = Object.keys(CFG.curriculum).filter(k => k !== '_error')[0];
+    if (firstVersion) _renderCurriculumCharts(firstVersion);
+  };
+
+  // ── Reward Gate Charts ──
+  window._chartInits['tab-rewards'] = function() {
+    // v_gate
+    const ds = [];
+    const vg_baseline = [], vg_floor = [], vg_softer = [];
+    for (let d = 0; d <= 4; d += 0.05) {
+      ds.push(d.toFixed(2));
+      vg_baseline.push(Math.max(0, Math.min(1, (d - 1.0) / (2.5 - 1.0))));
+      vg_floor.push(Math.max(0.2, Math.min(1, (d - 1.0) / (2.5 - 1.0))));
+      vg_softer.push(Math.max(0, Math.min(1, (d - 0.6) / (2.5 - 0.6))));
+    }
+    Plotly.newPlot('chart-vgate', [
+      {x: ds, y: vg_baseline, name: 'baseline', line: {color: '#7aa2f7'}},
+      {x: ds, y: vg_floor, name: 'floor (0.2)', line: {color: '#9ece6a'}},
+      {x: ds, y: vg_softer, name: 'softer (d=0.6)', line: {color: '#ff9e64'}},
+    ], mergeLayout({title: 'v_gate(d_safe) — Family 1',
+      xaxis: {title: 'd_safe (m)', gridcolor: '#3b4261'},
+      yaxis: {title: 'gate value', range: [-0.1, 1.1], gridcolor: '#3b4261'}}), PLOTLY_CONFIG);
+    // progress_gate
+    const pg_baseline = [], pg_delayed = [], pg_weaken = [];
+    for (let d = 0; d <= 4; d += 0.05) {
+      // baseline: d_danger=0.8, neg=-0.5, d_comfort=2.0
+      if (d < 0.8) pg_baseline.push(-0.5);
+      else if (d < 2.0) pg_baseline.push(-0.5 + (0.5+1.0)*(d-0.8)/(2.0-0.8));
+      else pg_baseline.push(1.0);
+      // delayed: d_danger=0.55
+      if (d < 0.55) pg_delayed.push(-0.5);
+      else if (d < 2.0) pg_delayed.push(-0.5 + 1.5*(d-0.55)/(2.0-0.55));
+      else pg_delayed.push(1.0);
+      // weaken: neg=-0.2
+      if (d < 0.8) pg_weaken.push(-0.2);
+      else if (d < 2.0) pg_weaken.push(-0.2 + 1.2*(d-0.8)/(2.0-0.8));
+      else pg_weaken.push(1.0);
+    }
+    Plotly.newPlot('chart-pgate', [
+      {x: ds, y: pg_baseline, name: 'baseline', line: {color: '#7aa2f7'}},
+      {x: ds, y: pg_delayed, name: 'delayed_neg', line: {color: '#9ece6a'}},
+      {x: ds, y: pg_weaken, name: 'weaken_neg', line: {color: '#ff9e64'}},
+    ], mergeLayout({title: 'progress_gate(d_safe) — Family 2',
+      xaxis: {title: 'd_safe (m)', gridcolor: '#3b4261'},
+      yaxis: {title: 'gate value', range: [-0.7, 1.2], gridcolor: '#3b4261'}}), PLOTLY_CONFIG);
+  };
+
+  // ── Action Heatmap ──
+  window._chartInits['tab-actions'] = function() {
+    const n = 19, center = 9;
+    const a_max = 0.5, w_max = 0.785;
+    const z = [], xtick = [], ytick = [];
+    for (let i = 0; i < n; i++) {
+      const row = [];
+      const a = ((i - center) / center) * a_max;
+      ytick.push(a.toFixed(2));
+      for (let j = 0; j < n; j++) {
+        const w = ((j - center) / center) * w_max;
+        if (i === 0) xtick.push(w.toFixed(2));
+        row.push(Math.sqrt(a*a + w*w));
+      }
+      z.push(row);
+    }
+    Plotly.newPlot('chart-action-heatmap', [{z: z, x: xtick, y: ytick,
+      type: 'heatmap', colorscale: 'Viridis', colorbar: {title: '||(a,ω)||'}}],
+      mergeLayout({title: 'Action Magnitude (m/s² & rad/s)',
+        xaxis: {title: 'ω (rad/s)', gridcolor: '#3b4261'},
+        yaxis: {title: 'accel (m/s²)', gridcolor: '#3b4261'}}), PLOTLY_CONFIG);
+  };
+
+  // ── Scene Top-Down ──
+  window._chartInits['tab-env'] = function() {
+    const W = CFG.environment.arena.width / 2;
+    const t = CFG.environment.arena.wall_thickness;
+    // Boundary walls as shapes
+    const shapes = [
+      {type:'rect', x0:-W-t, y0:-W, x1:-W, y1:W, fillcolor:'#3b4261', line:{width:0}},
+      {type:'rect', x0:W, y0:-W, x1:W+t, y1:W, fillcolor:'#3b4261', line:{width:0}},
+      {type:'rect', x0:-W-t, y0:-W-t, x1:W+t, y1:-W, fillcolor:'#3b4261', line:{width:0}},
+      {type:'rect', x0:-W-t, y0:W, x1:W+t, y1:W+t, fillcolor:'#3b4261', line:{width:0}},
+    ];
+    // Example internal walls
+    const iwalls = [
+      [-5,-3,-5,3], [-2,-4,2,-4], [3,-2,3,4], [-6,2,0,2],
+    ];
+    iwalls.forEach(w => {
+      shapes.push({type:'line', x0:w[0], y0:w[1], x1:w[2], y1:w[3],
+        line:{color:'#565f89', width:4}});
+    });
+    // Example obstacles
+    const obs_x = [-3,2,5,-7,0,4,-4,6,-1,3];
+    const obs_y = [1,-3,5,4,-6,2,-5,0,7,-7];
+    // Robot
+    const robot = {x:[0], y:[0], mode:'markers', marker:{size:14, color:'#7aa2f7', symbol:'circle'},
+      name:'Robot', text:['Robot (0,0)']};
+    // Goal
+    const goal = {x:[7], y:[5], mode:'markers', marker:{size:12, color:'#9ece6a', symbol:'star'},
+      name:'Goal', text:['Goal']};
+    // Obstacles
+    const obsTrace = {x:obs_x, y:obs_y, mode:'markers',
+      marker:{size:10, color:'#f7768e', symbol:'circle', opacity:0.7}, name:'Obstacles'};
+
+    Plotly.newPlot('chart-scene', [robot, goal, obsTrace],
+      mergeLayout({
+        title: '場景俯視圖 (Example)',
+        xaxis: {title: 'X (m)', range: [-12, 12], scaleanchor:'y', gridcolor: '#3b4261'},
+        yaxis: {title: 'Y (m)', range: [-12, 12], gridcolor: '#3b4261'},
+        shapes: shapes,
+        showlegend: true, legend: {x:0.01, y:0.99},
+      }), PLOTLY_CONFIG);
+  };
+
+  // ── CADN Drift → Blend Weight Response ──
+  window._chartInits['tab-cadn'] = function() {
+    // Simulate drift sweep for 3 branches, showing blend weight response
+    const branches = [
+      {name: 'State', tau_lo: 0.25, tau_hi: 0.55, color: '#9ece6a'},
+      {name: 'LiDAR', tau_lo: 0.30, tau_hi: 0.60, color: '#7aa2f7'},
+      {name: 'Obstacle', tau_lo: 0.20, tau_hi: 0.50, color: '#ff9e64'},
+    ];
+    const traces = [];
+    branches.forEach(b => {
+      const xs = [], ys = [];
+      for (let d = 0; d <= 1.0; d += 0.01) {
+        xs.push(d.toFixed(2));
+        ys.push(Math.max(0, Math.min(1, (d - b.tau_lo) / (b.tau_hi - b.tau_lo))));
+      }
+      traces.push({x: xs, y: ys, name: b.name + ' (τ=[' + b.tau_lo + ',' + b.tau_hi + '])',
+        type: 'scatter', mode: 'lines', line: {color: b.color, width: 2.5}});
+    });
+    // Add threshold region annotations
+    Plotly.newPlot('chart-cadn-drift', traces,
+      mergeLayout({
+        title: 'Blend Weight w(d) — Drift → Fast Channel 響應',
+        xaxis: {title: 'Drift magnitude d', range: [0, 1.0], gridcolor: '#3b4261'},
+        yaxis: {title: 'Blend weight w (0=slow, 1=fast)', range: [-0.05, 1.1], gridcolor: '#3b4261'},
+        shapes: [
+          {type: 'rect', x0: 0, x1: 0.20, y0: 0, y1: 1.1,
+           fillcolor: 'rgba(158,206,106,0.06)', line: {width: 0}},
+          {type: 'rect', x0: 0.55, x1: 1.0, y0: 0, y1: 1.1,
+           fillcolor: 'rgba(247,118,142,0.06)', line: {width: 0}},
+        ],
+        annotations: [
+          {x: 0.10, y: 1.05, text: 'Stable<br>(slow)', showarrow: false,
+           font: {size: 10, color: '#9ece6a'}},
+          {x: 0.78, y: 1.05, text: 'Drift detected<br>(fast)', showarrow: false,
+           font: {size: 10, color: '#f7768e'}},
+        ],
+      }), PLOTLY_CONFIG);
+  };
+
+  // ── Init first visible tab ──
+  document.addEventListener('DOMContentLoaded', () => {
+    // tab-nn is default, no chart to init
+    // But pre-init ppo if user clicks fast
+  });
+</script>
+
+</body>
+</html>
