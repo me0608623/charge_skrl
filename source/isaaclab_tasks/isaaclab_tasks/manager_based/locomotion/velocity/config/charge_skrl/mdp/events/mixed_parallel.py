@@ -233,6 +233,10 @@ def randomize_obstacles_by_difficulty(
         # All obstacles active (default)
         env._obstacle_active_mask[env_ids[is_dynamic]] = True
 
+    # Mixed 模式: 記錄靜態障礙物數量，供 move_obstacles_vectorized 判斷
+    if is_mixed.any():
+        env._num_obstacles_static_mixed = num_obstacles_static
+
     # ========================================================================
     # 第五步：遍歷所有障礙物，設置位置和速度
     # ========================================================================

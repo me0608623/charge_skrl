@@ -431,7 +431,8 @@ def reset_root_state_fixed_per_env(
         obs_positions = []  # list of [N, 2] tensors
         obs_radii = []
         obs_sizes = getattr(env, "_obstacle_sizes", None)
-        for i in range(20):
+        _num_obs = getattr(env, "_num_obstacles", 100)
+        for i in range(_num_obs):
             obs_name = f"obstacle_{i}"
             if obs_name not in env.scene.keys():
                 continue

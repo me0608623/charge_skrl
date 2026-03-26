@@ -687,11 +687,11 @@ def move_obstacles_vectorized(
     device = env.device
     num_envs_total = env.num_envs
 
-    # Only process dynamic environments (difficulty == 2)
+    # Process dynamic (difficulty == 2) and mixed (difficulty == 3) environments
     if not hasattr(env, "_env_difficulty"):
         return
     difficulty = env._env_difficulty[env_ids]
-    is_dynamic = (difficulty == 2)
+    is_dynamic = (difficulty == 2) | (difficulty == 3)
     if not is_dynamic.any():
         return
 
@@ -779,6 +779,16 @@ def move_obstacles_vectorized(
 
     # Zero velocity for invisible obstacles
     vel[~visible] = 0.0
+
+    # Mixed mode (difficulty == 3): 只移動 index >= num_obstacles_static 的障礙物
+    # 前 num_obstacles_static 個是靜態的，不應該移動
+    if hasattr(env, "_env_difficulty"):
+        mixed_envs = (env._env_difficulty[dyn_env_ids] == 3)  # [D]
+        if mixed_envs.any():
+            num_static = getattr(env, "_num_obstacles_static_mixed", 0)
+            if num_static > 0 and num_static < N:
+                # 對 mixed env 的前 num_static 個障礙物清零速度
+                vel[mixed_envs, :num_static, :] = 0.0
 
     # Position update (world frame, only visible)
     all_pos[:, :, 0:2] += vel * move_dt * visible.unsqueeze(2).float()

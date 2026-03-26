@@ -160,11 +160,12 @@ class MySceneCfgVLP16_20x20(MySceneCfgVLP16):
             ),
         ]
 
-        # 100 個障礙物（循環 10 種外觀模板，初始隱藏在 Z = -10.0）
-        # 實際使用數量由 event params 的 num_obstacles_static/dynamic 控制
+        # 100 個障礙物（循環外觀模板，初始隱藏在 Z = -10.0）
+        # 前 50 個: 靜態外觀（混合色系）
+        # 後 50 個: 動態外觀（深紅色，較高 2.0m+，易辨識）
         MAX_OBS = 100
         HIDDEN_Z = -10.0
-        _obstacle_templates = [
+        _static_tpl = [
             {"type": "cuboid", "size": (0.5, 0.5, 1.2), "color": (0.8, 0.2, 0.2)},
             {"type": "cylinder", "radius": 0.3, "height": 1.0, "color": (0.8, 0.8, 0.2)},
             {"type": "cuboid", "size": (0.7, 0.7, 1.4), "color": (0.2, 0.4, 0.8)},
@@ -176,10 +177,17 @@ class MySceneCfgVLP16_20x20(MySceneCfgVLP16):
             {"type": "cuboid", "size": (0.55, 0.55, 1.1), "color": (0.9, 0.9, 0.9)},
             {"type": "cylinder", "radius": 0.28, "height": 1.1, "color": (0.3, 0.3, 0.3)},
         ]
+        _dynamic_tpl = [
+            {"type": "cylinder", "radius": 0.3, "height": 2.0, "color": (0.7, 0.0, 0.0)},
+            {"type": "cylinder", "radius": 0.35, "height": 2.2, "color": (0.6, 0.0, 0.0)},
+            {"type": "cylinder", "radius": 0.25, "height": 2.0, "color": (0.8, 0.0, 0.0)},
+            {"type": "cylinder", "radius": 0.32, "height": 2.1, "color": (0.65, 0.05, 0.05)},
+            {"type": "cylinder", "radius": 0.28, "height": 2.0, "color": (0.75, 0.0, 0.0)},
+        ]
 
         obstacle_sizes: list[float] = []
         for i in range(MAX_OBS):
-            cfg = _obstacle_templates[i % len(_obstacle_templates)]
+            cfg = _static_tpl[i % len(_static_tpl)] if i < 50 else _dynamic_tpl[(i - 50) % len(_dynamic_tpl)]
             if cfg["type"] == "cuboid":
                 spawn_cfg = sim_utils.CuboidCfg(
                     size=cfg["size"],
