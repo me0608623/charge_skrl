@@ -49,6 +49,7 @@ def randomize_obstacles_by_difficulty(
     empty_ratio: float = 0.5,      # 50% 空環境（無障礙物）
     static_ratio: float = 0.3,     # 30% 靜態障礙物
     dynamic_ratio: float = 0.2,    # 20% 動態障礙物
+    mixed_ratio: float = 0.0,      # 混合模式：前 N_s 個靜態 + 後 N_d 個動態
     # 障礙物配置
     num_obstacles_static: int = 5,   # 靜態環境的障礙物數量
     num_obstacles_dynamic: int = 8,  # 動態環境的障礙物數量
@@ -145,26 +146,22 @@ def randomize_obstacles_by_difficulty(
     # ========================================================================
     # 使用隨機採樣而非確定性切分，避免 N 較小時整數截斷導致比例失真
     # （例如 N=1 時 int(0.2*1)=0, int(0.7*1)=0 → 全部變 dynamic）
+    # 難度分級: 0=empty, 1=static, 2=dynamic, 3=mixed (static+dynamic 同場)
     rand = torch.rand(N, device=device)
+    t_e = empty_ratio
+    t_s = t_e + static_ratio
+    t_d = t_s + dynamic_ratio
     difficulty = torch.where(
-        rand < empty_ratio,
-        torch.zeros(N, device=device, dtype=torch.long),
-        torch.where(
-            rand < empty_ratio + static_ratio,
-            torch.ones(N, device=device, dtype=torch.long),
-            torch.full((N,), 2, device=device, dtype=torch.long),
-        )
-    )
+        rand < t_e, torch.zeros(N, device=device, dtype=torch.long),
+        torch.where(rand < t_s, torch.ones(N, device=device, dtype=torch.long),
+            torch.where(rand < t_d, torch.full((N,), 2, device=device, dtype=torch.long),
+                torch.full((N,), 3, device=device, dtype=torch.long))))
 
     # 🔥 DEBUG: 顯示分配結果
     if debug:
-        n_empty = (difficulty == 0).sum().item()
-        n_static = (difficulty == 1).sum().item()
-        n_dynamic = (difficulty == 2).sum().item()
-        print(f"[DEBUG] Difficulty assignment (N={N}): "
-              f"Empty={n_empty} ({n_empty/N*100:.1f}%), "
-              f"Static={n_static} ({n_static/N*100:.1f}%), "
-              f"Dynamic={n_dynamic} ({n_dynamic/N*100:.1f}%)")
+        print(f"[DEBUG] Difficulty (N={N}): "
+              f"E={(difficulty==0).sum().item()} S={(difficulty==1).sum().item()} "
+              f"D={(difficulty==2).sum().item()} M={(difficulty==3).sum().item()}")
 
     # 記錄每個環境的難度級別
     env._env_difficulty[env_ids] = difficulty
@@ -206,6 +203,8 @@ def randomize_obstacles_by_difficulty(
     is_empty = (difficulty == 0)
     is_static = (difficulty == 1)
     is_dynamic = (difficulty == 2)
+    is_mixed = (difficulty == 3)
+    num_obstacles_mixed = num_obstacles_static + num_obstacles_dynamic
 
     # ========================================================================
     # Active density masking for dynamic environments
@@ -245,11 +244,15 @@ def randomize_obstacles_by_difficulty(
         # Dynamic 環境：只有前 num_obstacles_dynamic 個障礙物可見
 
         should_show_in_static = (i < num_obstacles_static)
-        # Active density masking: use per-env mask for dynamic environments
         should_show_in_dynamic = env._obstacle_active_mask[env_ids, i]  # [N] tensor
+        should_show_in_mixed = (i < num_obstacles_mixed)
 
         # 計算可見性掩碼
-        visible_mask = (is_static & should_show_in_static) | (is_dynamic & should_show_in_dynamic)
+        visible_mask = (
+            (is_static & should_show_in_static)
+            | (is_dynamic & should_show_in_dynamic)
+            | (is_mixed & should_show_in_mixed)
+        )
 
         # 準備位置張量 [N, 3]
         pos = torch.zeros(N, 3, device=device, dtype=torch.float32)
@@ -354,8 +357,10 @@ def randomize_obstacles_by_difficulty(
         # -------------------------------------------------------------------
         vel = torch.zeros(N, 6, device=device, dtype=torch.float32)  # [vx, vy, vz, wx, wy, wz]
 
-        # 只有動態環境且可見的障礙物才需要速度
-        should_have_velocity = is_dynamic & visible_mask
+        # Dynamic: 所有可見障礙物都移動
+        # Mixed: 前 num_obstacles_static 個靜止，後面的才移動
+        mixed_should_move = is_mixed & visible_mask & (i >= num_obstacles_static)
+        should_have_velocity = (is_dynamic & visible_mask) | mixed_should_move
 
         if should_have_velocity.any():
             num_vel = should_have_velocity.sum().item()
@@ -415,24 +420,22 @@ def randomize_obstacles_by_difficulty(
     # 使用張量操作，避免 Python for 循環
     # Compute per-env active counts for dynamic envs from the mask
     dynamic_active_counts = env._obstacle_active_mask[env_ids].sum(dim=1).long()  # [N]
+    mixed_counts = torch.full((N,), num_obstacles_mixed, device=device, dtype=torch.long)
     env._env_num_visible_obstacles[env_ids] = torch.where(
-        is_empty,
-        torch.zeros(N, device=device, dtype=torch.long),
-        torch.where(
-            is_static,
-            torch.full((N,), num_obstacles_static, device=device, dtype=torch.long),
-            dynamic_active_counts,
-        )
-    )
+        is_empty, torch.zeros(N, device=device, dtype=torch.long),
+        torch.where(is_static, torch.full((N,), num_obstacles_static, device=device, dtype=torch.long),
+            torch.where(is_dynamic, dynamic_active_counts, mixed_counts)))
 
     # 🔥 DEBUG: 最終統計
     if debug:
         num_empty = is_empty.sum().item()
         num_static = is_static.sum().item()
         num_dynamic = is_dynamic.sum().item()
+        num_mixed = is_mixed.sum().item()
         print(f"[DEBUG] === SUMMARY ===")
-        print(f"[DEBUG] Empty environments: {num_empty}")
-        print(f"[DEBUG] Static environments: {num_static} ({num_obstacles_static} obstacles each)")
+        print(f"[DEBUG] Empty: {num_empty}, Static: {num_static} ({num_obstacles_static}ea), "
+              f"Dynamic: {num_dynamic} ({num_obstacles_dynamic}ea), "
+              f"Mixed: {num_mixed} ({num_obstacles_static}s+{num_obstacles_dynamic}d={num_obstacles_mixed}ea)")
         print(f"[DEBUG] Dynamic environments: {num_dynamic} ({num_obstacles_dynamic} obstacles each)")
         print(f"[DEBUG] =================")
 
