@@ -23,6 +23,7 @@ from .goal_rewards import (
 from .safety_rewards import (
     collision_occurred,
     collision_contact_occurred,
+    obstacle_proximity_termination,
     progressive_collision_penalty,
 )
 

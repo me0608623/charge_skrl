@@ -502,6 +502,40 @@ def collision_contact_occurred(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCf
     # 接觸力 > 0.1 N → True（碰撞，終止）
 
 
+def obstacle_proximity_termination(
+    env: "ManagerBasedRLEnv",
+    threshold: float = 0.45,
+    max_obstacles: int = 100,
+) -> torch.Tensor:
+    """終止條件：robot center 距 obstacle center 過近（直接位置計算）
+
+    不依賴 LiDAR 射線或 PhysX 接觸力，直接比較 XY 平面距離。
+    對 kinematic obstacles 和任何高度的障礙物都有效。
+
+    碰撞判定: dist(robot, obstacle) < threshold + obstacle_radius
+    threshold=0.45m = robot_body_radius(0.35) + buffer(0.10)
+    """
+    robot_pos = env.scene["robot"].data.root_pos_w[:, :2]  # [N, 2]
+    collision = torch.zeros(env.num_envs, device=env.device, dtype=torch.bool)
+
+    obs_sizes = getattr(env, "_obstacle_sizes", None)
+
+    for i in range(max_obstacles):
+        obs_name = f"obstacle_{i}"
+        if obs_name not in env.scene.keys():
+            continue
+        obs_entity = env.scene[obs_name]
+        obs_pos = obs_entity.data.root_pos_w  # [N, 3]
+        visible = obs_pos[:, 2] > 0.0  # Z > 0 = 可見
+        if not visible.any():
+            continue
+        dist = torch.norm(robot_pos - obs_pos[:, :2], dim=1)  # [N]
+        obs_r = obs_sizes[i] / 2.0 if obs_sizes is not None and i < len(obs_sizes) else 0.3
+        collision = collision | (visible & (dist < threshold + obs_r))
+
+    return collision
+
+
 def wall_collision_penalty(
     env: ManagerBasedRLEnv,
     asset_cfg: SceneEntityCfg,

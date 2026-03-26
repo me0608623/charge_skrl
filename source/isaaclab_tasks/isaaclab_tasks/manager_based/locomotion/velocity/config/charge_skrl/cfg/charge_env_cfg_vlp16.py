@@ -70,6 +70,7 @@ from ..mdp.rewards import (
     reaching_goal,
     collision_occurred,
     collision_contact_occurred,
+    obstacle_proximity_termination,
 )
 from ..mdp.rewards.potential_based_rewards import (
     potential_progress_reward,
@@ -620,13 +621,13 @@ class TerminationsCfgVLP16:
         func=robot_tipped_over,
         params={"asset_cfg": SceneEntityCfg("robot")},
     )
-    # PhysX contact sensor 碰撞偵測（取代 LiDAR distance threshold）
-    # contact_sensor filter = Obstacle_.*，物理碰撞 100% 可靠
+    # 障礙物碰撞偵測 — 直接位置距離計算（不依賴 LiDAR 射線或 PhysX 接觸力）
+    # kinematic obstacles + LiDAR 1.6m 高度導致 LiDAR/contact 偵測都失效
     collision = DoneTerm(
-        func=collision_contact_occurred,
-        params={"sensor_cfg": SceneEntityCfg("contact_sensor")},
+        func=obstacle_proximity_termination,
+        params={"threshold": COLLISION_THRESHOLD, "max_obstacles": MAX_OBSTACLES},
     )
-    # AABB 牆壁碰撞偵測（LiDAR collision 的互補安全網）
+    # AABB 牆壁碰撞偵測
     wall_collision = DoneTerm(
         func=wall_collision_termination,
         params={"asset_cfg": SceneEntityCfg("robot"), "threshold": COLLISION_THRESHOLD},

@@ -100,6 +100,15 @@ def randomize_obstacles_by_difficulty(
     # ========================================================================
     # 參數處理與初始化
     # ========================================================================
+    # 首次呼叫時 log 障礙物配置
+    if not hasattr(env, "_obstacle_cfg_logged"):
+        env._obstacle_cfg_logged = True
+        mr = mixed_ratio if mixed_ratio else 0.0
+        print(f"[randomize_obstacles] config: "
+              f"static={num_obstacles_static} dynamic={num_obstacles_dynamic} "
+              f"max_obstacles={max_obstacles} "
+              f"ratios: E={empty_ratio:.0%} S={static_ratio:.0%} D={dynamic_ratio:.0%} M={mr:.0%}")
+
     if env_ids is None:
         env_ids = torch.arange(env.num_envs, device=env.device)
     elif not isinstance(env_ids, torch.Tensor):
@@ -316,7 +325,8 @@ def randomize_obstacles_by_difficulty(
                         other_obstacle = env.scene[other_name]
                         other_pos = other_obstacle.data.root_pos_w[env_ids, :2]
                         dist_to_other = torch.norm(pos[:, :2] - other_pos, dim=1)
-                        valid_obstacles &= dist_to_other >= min_obstacle_spacing
+                        # 允許部分重疊但不允許完全重疊（中心距 < 0.3m 才算重疊）
+                        valid_obstacles &= dist_to_other >= 0.3
                     except KeyError:
                         pass
 
